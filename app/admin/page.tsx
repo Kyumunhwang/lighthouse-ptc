@@ -79,6 +79,9 @@ export default function AdminConsolePage() {
   const [blockReasonInput, setBlockReasonInput] = useState("교사 출장/회의");
   const [addingBlock, setAddingBlock] = useState(false);
 
+  // Schedule Matrix Overview State (날짜별 교사·시간대별 예약 매트릭스)
+  const [matrixSelectedDate, setMatrixSelectedDate] = useState<string>("");
+
   const loadData = async (force: boolean = false) => {
     if (force) setSyncing(true);
     try {
@@ -322,6 +325,126 @@ export default function AdminConsolePage() {
     );
   }, [reservations, searchQuery]);
 
+  // --- Schedule Matrix Calculations & Helpers (Loop-Free & Null-Safe) ---
+  const [showMatrixView, setShowMatrixView] = useState(true);
+
+  const matrixDates = useMemo(() => {
+    return Array.from(new Set(timeSlots.map((t) => t?.date).filter(Boolean))) as string[];
+  }, [timeSlots]);
+
+  const activeDate = (matrixSelectedDate && matrixDates.includes(matrixSelectedDate))
+    ? matrixSelectedDate
+    : (matrixDates[0] || "");
+
+  const matrixTimeSlots = useMemo(() => {
+    if (!activeDate) return [];
+    const slotsForDate = timeSlots.filter((t) => (t?.date || "").trim() === activeDate.trim());
+    const seen = new Set<string>();
+    const distinct: TimeSlotRecord[] = [];
+    for (const s of slotsForDate) {
+      if (s && s.time && !seen.has(s.time)) {
+        seen.add(s.time);
+        distinct.push(s);
+      }
+    }
+    return distinct;
+  }, [timeSlots, activeDate]);
+
+  // 시작시간 추출 헬퍼 (예: "1:50-2:10pm" -> "1:50pm")
+  const formatStartTime = (timeStr?: string) => {
+    if (!timeStr) return "";
+    const parts = timeStr.split(/[-~]/);
+    const startPart = parts[0]?.trim() || timeStr;
+    const matchMeridiem = timeStr.match(/(am|pm)/i);
+    if (matchMeridiem && !startPart.toLowerCase().includes("am") && !startPart.toLowerCase().includes("pm")) {
+      return `${startPart}${matchMeridiem[0].toLowerCase()}`;
+    }
+    return startPart;
+  };
+
+  // 학생 이름 간소화 헬퍼 (예: "김민준 (Minjun Kim)" -> "김민준")
+  const formatStudentNameOnly = (fullName?: string) => {
+    if (!fullName) return "";
+    const namePart = fullName.split("(")[0]?.trim();
+    return namePart || fullName;
+  };
+
+  // 셀별 확정 예약 매칭 (방어적 코드 적용)
+  const getCellReservation = (teacher: TeacherRecord, slotTime: string, date: string): ReservationRecord | undefined => {
+    if (!teacher || !slotTime || !date) return undefined;
+    const targetDate = date.trim().toLowerCase();
+    const targetTime = slotTime.trim().toLowerCase();
+    const tEn = (teacher.nameEn || "").trim().toLowerCase();
+    const tKo = (teacher.nameKo || "").trim().toLowerCase();
+
+    return reservations.find((r) => {
+      if (!r || r.status !== "CONFIRMED") return false;
+      const rDate = (r.date || "").trim().toLowerCase();
+      const rTime = (r.timeSlot || "").trim().toLowerCase();
+      if (rDate !== targetDate || rTime !== targetTime) return false;
+
+      const rTeacher = (r.teacherName || "").trim().toLowerCase();
+      return (
+        (tEn && rTeacher === tEn) ||
+        (tKo && rTeacher === tKo) ||
+        (tEn && rTeacher.includes(tEn)) ||
+        (tKo && rTeacher.includes(tKo))
+      );
+    });
+  };
+
+  // 셀별 불가(차단) 매칭 (방어적 코드 적용)
+  const getCellBlocked = (teacher: TeacherRecord, slotTime: string, date: string): { blocked: boolean; reason?: string } => {
+    if (!teacher || !slotTime || !date) return { blocked: false };
+    const targetDate = date.trim().toLowerCase();
+    const targetTime = slotTime.trim().toLowerCase();
+    const tEn = (teacher.nameEn || "").trim().toLowerCase();
+    const tKo = (teacher.nameKo || "").trim().toLowerCase();
+
+    const found = blockedSlots.find((b) => {
+      if (!b) return false;
+      const bTeacher = (b.teacherName || "").trim().toLowerCase();
+      const bDate = (b.date || "").trim().toLowerCase();
+      const bTime = (b.timeSlot || "").trim().toLowerCase();
+
+      const teacherMatch =
+        bTeacher === "all" ||
+        (tEn && bTeacher === tEn) ||
+        (tKo && bTeacher === tKo);
+      const dateMatch = bDate === "all" || bDate === targetDate;
+      const timeMatch = bTime === "all" || bTime === targetTime;
+
+      return teacherMatch && dateMatch && timeMatch;
+    });
+
+    return found ? { blocked: true, reason: found.reason || "상담 불가" } : { blocked: false };
+  };
+
+  // 선택 날짜 통계 요약
+  const matrixStats = useMemo(() => {
+    if (!activeDate || teachers.length === 0 || matrixTimeSlots.length === 0) {
+      return { totalSlots: 0, bookedCount: 0, blockedCount: 0, rate: 0 };
+    }
+    const totalSlots = teachers.length * matrixTimeSlots.length;
+    let bookedCount = 0;
+    let blockedCount = 0;
+
+    teachers.forEach((t) => {
+      matrixTimeSlots.forEach((s) => {
+        const res = getCellReservation(t, s.time, activeDate);
+        if (res) {
+          bookedCount++;
+        } else {
+          const blk = getCellBlocked(t, s.time, activeDate);
+          if (blk.blocked) blockedCount++;
+        }
+      });
+    });
+
+    const rate = totalSlots > 0 ? Math.round((bookedCount / totalSlots) * 100) : 0;
+    return { totalSlots, bookedCount, blockedCount, rate };
+  }, [teachers, matrixTimeSlots, reservations, blockedSlots, activeDate]);
+
   return (
     <div className="min-h-screen bg-[#f8f9ff]">
       {/* Top Header */}
@@ -341,7 +464,18 @@ export default function AdminConsolePage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => {
+              setShowMatrixView(true);
+              const el = document.getElementById("schedule-matrix-section");
+              if (el) el.scrollIntoView({ behavior: "smooth" });
+            }}
+            className="px-3 py-1.5 bg-[#cca730] hover:bg-[#e0b836] text-[#00193c] rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-xs"
+          >
+            <span className="material-symbols-outlined text-sm">grid_view</span>
+            <span>전체 상담 예약 현황 보기</span>
+          </button>
           <button
             onClick={() => loadData(true)}
             disabled={syncing}
@@ -394,6 +528,176 @@ export default function AdminConsolePage() {
             </div>
             <span className="text-[11px] text-emerald-600">Google Sheet Dynamic Adapter</span>
           </div>
+        </div>
+
+        {/* Schedule Matrix Overview Table (날짜별 교사·시간대별 예약 종합 현황표) */}
+        <div id="schedule-matrix-section" className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+            <div>
+              <div className="flex items-center gap-1.5 text-xs font-bold text-[#00193c]">
+                <span className="material-symbols-outlined text-base text-[#002d62]">
+                  grid_view
+                </span>
+                날짜별 교사·시간대별 상담 예약 현황 매트릭스 (종합 상황판)
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                가로는 시작시간, 세로는 한글 교사명으로 정렬되어 각 셀에서 예약된 학생 이름을 한눈에 확인하실 수 있습니다. (가로/세로 스크롤 고정 지원)
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Date Selector Tabs */}
+              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                {matrixDates.map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => {
+                      setMatrixSelectedDate(d);
+                      setShowMatrixView(true);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                      activeDate === d
+                        ? "bg-[#00193c] text-white shadow-xs"
+                        : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/60"
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[13px]">event</span>
+                    <span>{d}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* View/Hide Matrix Button */}
+              <button
+                onClick={() => setShowMatrixView(!showMatrixView)}
+                className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 transition flex items-center gap-1 shadow-2xs shrink-0"
+              >
+                <span className="material-symbols-outlined text-sm">
+                  {showMatrixView ? "expand_less" : "grid_view"}
+                </span>
+                <span>{showMatrixView ? "화면 접기" : "전체 예약 화면 열기"}</span>
+              </button>
+            </div>
+          </div>
+
+          {!showMatrixView ? (
+            <div className="p-4 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-500 flex items-center justify-center gap-2">
+              <span className="material-symbols-outlined text-base text-slate-400">visibility</span>
+              <span>현재 현황표가 접혀 있습니다. 우측 상단의 <strong>[전체 예약 화면 열기]</strong> 버튼을 누르면 상담 예약 매트릭스가 표시됩니다.</span>
+            </div>
+          ) : (
+            <>
+              {/* Matrix Stats Summary Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 bg-slate-50 rounded-xl text-xs text-slate-600 border border-slate-200/70">
+                <div className="flex items-center gap-3">
+                  <span className="font-semibold text-[#00193c]">
+                    선택 일자: <strong className="text-[#002d62]">{activeDate || "선택 없음"}</strong>
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <span>총 교사: <strong className="text-slate-800">{teachers.length}명</strong></span>
+                  <span className="text-slate-300">|</span>
+                  <span>시간대: <strong className="text-slate-800">{matrixTimeSlots.length}타임</strong></span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded-md bg-blue-100 text-[#002d62] font-semibold text-[11px]">
+                    예약 완료: {matrixStats.bookedCount}건 ({matrixStats.rate}%)
+                  </span>
+                  {matrixStats.blockedCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-md bg-red-100 text-red-700 font-semibold text-[11px]">
+                      상담 불가: {matrixStats.blockedCount}건
+                    </span>
+                  )}
+                  <span className="px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 font-semibold text-[11px]">
+                    빈 시간: {matrixStats.totalSlots - matrixStats.bookedCount - matrixStats.blockedCount}건
+                  </span>
+                </div>
+              </div>
+
+              {/* Matrix Table with Sticky Row/Column Headers & Smooth Scroll */}
+              <div className="overflow-auto max-h-[500px] border border-slate-200 rounded-xl relative shadow-inner">
+                <table className="w-full border-collapse text-xs select-none">
+                  <thead>
+                    <tr>
+                      {/* Top-Left Corner Sticky Cell */}
+                      <th className="sticky top-0 left-0 z-40 bg-slate-100 text-slate-700 font-bold border-b border-r border-slate-200 px-3 py-2 text-center text-[11px] min-w-[95px] max-w-[110px] whitespace-nowrap shadow-xs">
+                        교사명 \ 시작시간
+                      </th>
+                      {/* Horizontal Time Slots Headers (시작시간) */}
+                      {matrixTimeSlots.map((slot) => (
+                        <th
+                          key={slot.id || slot.time}
+                          title={`전체 시간대: ${slot.time}`}
+                          className="sticky top-0 z-30 bg-slate-100 text-slate-700 font-bold border-b border-r border-slate-200 px-2 py-2 text-center text-[11px] min-w-[76px] max-w-[88px] whitespace-nowrap"
+                        >
+                          {formatStartTime(slot.time)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {teachers.map((teacher) => (
+                      <tr key={teacher.id || teacher.nameEn} className="hover:bg-blue-50/20 transition-colors">
+                        {/* Vertical Teacher Name Sticky Header (한글교사명) */}
+                        <th className="sticky left-0 z-20 bg-white font-semibold text-[#00193c] border-b border-r border-slate-200 px-2.5 py-1.5 text-left text-xs min-w-[95px] max-w-[110px] whitespace-nowrap shadow-[2px_0_4px_rgba(0,0,0,0.04)]">
+                          <div className="truncate font-bold text-slate-800">
+                            {teacher.nameKo || teacher.nameEn}
+                          </div>
+                          {teacher.role && (
+                            <div className="text-[10px] text-slate-400 font-normal truncate">
+                              {teacher.role}
+                            </div>
+                          )}
+                        </th>
+
+                        {/* Matrix Cells (해당셀: 학생이름) */}
+                        {matrixTimeSlots.map((slot) => {
+                          const res = getCellReservation(teacher, slot.time, activeDate);
+                          const block = !res ? getCellBlocked(teacher, slot.time, activeDate) : { blocked: false };
+
+                          if (res) {
+                            return (
+                              <td
+                                key={slot.id || slot.time}
+                                title={`학생: ${res.studentName} (${res.studentGrade})\n학부모: ${res.parentName}\n선택과목: ${res.option}`}
+                                className="border-b border-r border-slate-200 p-1 text-center min-w-[76px] max-w-[88px] h-[36px] bg-blue-50/40"
+                              >
+                                <span className="block w-full py-1 px-1 bg-blue-100 text-[#002d62] font-bold text-[11px] rounded truncate border border-blue-200 shadow-2xs">
+                                  {formatStudentNameOnly(res.studentName)}
+                                </span>
+                              </td>
+                            );
+                          }
+
+                          if (block.blocked) {
+                            return (
+                              <td
+                                key={slot.id || slot.time}
+                                title={`운영자 상담 불가 지정 (${block.reason})`}
+                                className="border-b border-r border-slate-200 p-1 text-center min-w-[76px] max-w-[88px] h-[36px] bg-red-50/30"
+                              >
+                                <span className="block w-full py-1 px-1 bg-red-100 text-red-700 font-semibold text-[10px] rounded truncate border border-red-200">
+                                  불가
+                                </span>
+                              </td>
+                            );
+                          }
+
+                          return (
+                            <td
+                              key={slot.id || slot.time}
+                              className="border-b border-r border-slate-200 p-1 text-center min-w-[76px] max-w-[88px] h-[36px] text-slate-300 text-xs hover:bg-slate-50 transition"
+                            >
+                              -
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Dynamic Google Sheet ID Configuration Card */}
