@@ -64,26 +64,30 @@ export default function WelcomePage() {
     }
   }, [selectedGrade, students]);
 
-  // Handle Google Login Simulation & Role Check
-  const handleGoogleLogin = async (overrideRole?: "운영자" | "교사" | "학부모") => {
-    setLoading(true);
+  // Handle Google Login & Role Check (운영자 / 교사 / 학부모 구분)
+  const handleGoogleLogin = async () => {
     setVerificationError("");
 
-    let emailToUse = authEmail;
-    if (!emailToUse) {
-      if (overrideRole === "운영자") emailToUse = "kyumun.hwang@gmail.com";
-      else if (overrideRole === "교사") emailToUse = "lis.monicayu@gmail.com";
-      else emailToUse = "parent.user@gmail.com";
+    const trimmedEmail = authEmail.trim();
+    if (!trimmedEmail) {
+      setVerificationError("이메일 주소를 먼저 입력해 주세요");
+      return;
     }
+
+    if (!trimmedEmail.includes("@")) {
+      setVerificationError("올바른 Google 이메일 주소 형식을 입력해 주세요.");
+      return;
+    }
+
+    setLoading(true);
 
     try {
       const res = await fetch("/api/auth/google", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: emailToUse,
-          name: userName || emailToUse.split("@")[0],
-          roleOverride: overrideRole,
+          email: trimmedEmail,
+          name: userName || trimmedEmail.split("@")[0],
         }),
       });
       const data = await res.json();
@@ -93,47 +97,60 @@ export default function WelcomePage() {
         setUserRole(user.role);
         setAuthEmail(user.email);
         localStorage.setItem("ptc_user", JSON.stringify(user));
+        sessionStorage.setItem("ptc_user", JSON.stringify(user));
 
         if (user.role === "운영자") {
           router.push("/admin");
         } else if (user.role === "교사") {
-          router.push(`/teacher?name=${encodeURIComponent(user.name)}`);
+          router.push("/teacher");
         }
       } else {
-        setVerificationError(data.error || "Login verification failed");
+        setVerificationError(data.error || "로그인 확인 중 오류가 발생했습니다.");
       }
     } catch (err: any) {
-      setVerificationError(err.message || "Network error");
+      setVerificationError(err.message || "네트워크 오류가 발생했습니다.");
     } finally {
       setLoading(false);
     }
   };
 
-  // Handle Parent Student Verification
+  // Handle Parent Student Verification (자녀 및 학부모 성명 검증)
   const handleParentVerification = (e: React.FormEvent) => {
     e.preventDefault();
     setVerificationError("");
 
     if (!selectedStudentId) {
-      setVerificationError("Please select a student from the list.");
+      setVerificationError("자녀 학생을 먼저 선택해 주세요.");
       return;
     }
 
     const matched = students.find((s) => s.id === selectedStudentId);
     if (!matched) {
-      setVerificationError("Student record not found.");
+      setVerificationError("선택하신 학생 정보를 찾을 수 없습니다.");
       return;
     }
 
-    const inputClean = parentNameInput.trim().toLowerCase();
-    const fatherClean = matched.parentFather.trim().toLowerCase();
-    const motherClean = matched.parentMother.trim().toLowerCase();
+    const inputClean = parentNameInput.trim().replace(/\s+/g, "").toLowerCase();
+    if (!inputClean) {
+      setVerificationError("학부모 성함을 입력해 주세요.");
+      return;
+    }
 
-    // Verify parent name matches either father or mother in sheet (or allow if empty for flexibility)
-    if (inputClean && fatherClean && motherClean) {
-      if (!fatherClean.includes(inputClean) && !motherClean.includes(inputClean)) {
+    const fatherClean = (matched.parentFather || "").trim().replace(/\s+/g, "").toLowerCase();
+    const motherClean = (matched.parentMother || "").trim().replace(/\s+/g, "").toLowerCase();
+
+    // Verify parent name matches either father or mother in roster (when registered in roster)
+    if (fatherClean || motherClean) {
+      const fatherMatches =
+        fatherClean.length > 0 &&
+        (fatherClean.includes(inputClean) || inputClean.includes(fatherClean));
+      const motherMatches =
+        motherClean.length > 0 &&
+        (motherClean.includes(inputClean) || inputClean.includes(motherClean));
+
+      if (!fatherMatches && !motherMatches) {
         setVerificationError(
-          `Parent name does not match school records for ${matched.studentNameKo} (${matched.studentNameEn}). Please verify spelling.`
+          `입력하신 학부모 성함(${parentNameInput.trim()})이 ${matched.studentNameKo} (${matched.studentNameEn}) 학생의 학교 등록 학부모 명부와 일치하지 않습니다. 성함을 다시 확인해 주세요.`
         );
         return;
       }
@@ -145,7 +162,7 @@ export default function WelcomePage() {
       grade: matched.grade,
       studentNameKo: matched.studentNameKo,
       studentNameEn: matched.studentNameEn,
-      parentName: parentNameInput || matched.parentFather || matched.parentMother || "Parent",
+      parentName: parentNameInput.trim() || matched.parentFather || matched.parentMother || "학부모",
       email: authEmail,
     };
     sessionStorage.setItem("ptc_student_context", JSON.stringify(studentContext));
@@ -198,7 +215,7 @@ export default function WelcomePage() {
                 <div>
                   <div className="font-semibold text-[#00193c]">Conference Dates</div>
                   <div className="text-slate-600">
-                    {siteConfig?.conferenceDates || "2024년 10월 30일(목) · 11월 1일(금)"}{" "}
+                    {siteConfig?.conferenceDates || "2026년 10월 30일(목) · 11월 1일(금)"}{" "}
                     {siteConfig?.conferenceTimes ? `(${siteConfig.conferenceTimes})` : "(13:50 ~ 17:30)"}
                   </div>
                 </div>
@@ -210,7 +227,7 @@ export default function WelcomePage() {
                 <div>
                   <div className="font-semibold text-[#00193c]">신청 제한 (Quota)</div>
                   <div className="text-slate-600">
-                    학생 1인당 <span className="font-bold text-[#aa3344]">최대 4개 상담 항목</span>까지 예약 가능
+                    학생 1인당 <span className="font-bold text-[#aa3344]">최대 4개 상담교과</span>까지 예약 가능
                   </div>
                   {siteConfig?.noticeContent && (
                     <div className="text-[11px] text-slate-500 mt-1">
@@ -230,7 +247,7 @@ export default function WelcomePage() {
                   Login Status
                 </span>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-semibold">
-                  {userRole} Mode
+                  {userRole} 모드
                 </span>
               </div>
             )}
@@ -238,20 +255,29 @@ export default function WelcomePage() {
             {!isLoggedIn ? (
               <div className="space-y-3">
                 <p className="text-xs text-slate-600 leading-relaxed">
-                  먼저 Google Account로 로그인을 하시고 학부모는 자녀 확인 후 예약 화면으로 이동합니다. 예약할 때는 선생님의 성함과 해당 교과를 잘 선택하고, 원하는 시간대를 잘 배정하시길 바랍니다.
+                  본인의 Google 이메일 주소를 입력하신 후 로그인해 주세요. 등록된 계정에 따라 <strong>운영자</strong>, <strong>교사</strong>, <strong>학부모</strong> 화면으로 자동 연결됩니다.
                 </p>
 
-                {/* Email input for simulation or direct Google auth */}
+                {/* Email input for Google auth */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-slate-700">
                     Google Email Account
                   </label>
                   <input
                     type="email"
-                    placeholder="Enter your google account email"
+                    placeholder="예: example@gmail.com"
                     value={authEmail}
-                    onChange={(e) => setAuthEmail(e.target.value)}
-                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#002d62]"
+                    onChange={(e) => {
+                      setAuthEmail(e.target.value);
+                      if (verificationError) setVerificationError("");
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleGoogleLogin();
+                      }
+                    }}
+                    className="w-full px-3 py-2.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#002d62]"
                   />
                 </div>
 
@@ -279,36 +305,8 @@ export default function WelcomePage() {
                       d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
                     />
                   </svg>
-                  {loading ? "Checking..." : "Sign in with Google Account"}
+                  {loading ? "인증 확인 중..." : "Sign in with Google Account"}
                 </button>
-
-                {/* Quick Test Role Selectors for Admin/Teacher */}
-                <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-                  <span>빠른 계정 테스트:</span>
-                  <div className="flex gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => handleGoogleLogin("운영자")}
-                      className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium"
-                    >
-                      운영자(Admin)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleGoogleLogin("교사")}
-                      className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium"
-                    >
-                      교사(Teacher)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleGoogleLogin("학부모")}
-                      className="px-2 py-1 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium"
-                    >
-                      학부모(Parent)
-                    </button>
-                  </div>
-                </div>
               </div>
             ) : (
               <div className="space-y-4">
@@ -324,10 +322,11 @@ export default function WelcomePage() {
                     onClick={() => {
                       setIsLoggedIn(false);
                       setUserRole(null);
+                      setVerificationError("");
                     }}
-                    className="text-[11px] text-red-600 hover:underline"
+                    className="text-[11px] text-red-600 hover:underline font-semibold"
                   >
-                    로그아웃
+                    처음 로그인 화면으로
                   </button>
                 </div>
 
@@ -386,11 +385,11 @@ export default function WelcomePage() {
                   {selectedStudentId && (
                     <div>
                       <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                        3. 학부모 성함 (Parent Name)
+                        3. 학부모 성함 (Parent Name - 아버지 또는 어머니 성함)
                       </label>
                       <input
                         type="text"
-                        placeholder="학부모 성함을 입력하세요"
+                        placeholder="학교에 등록된 학부모 성함을 입력하세요"
                         value={parentNameInput}
                         onChange={(e) => setParentNameInput(e.target.value)}
                         className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#002d62]"
@@ -419,7 +418,7 @@ export default function WelcomePage() {
             )}
 
             {verificationError && !isLoggedIn && (
-              <div className="mt-3 p-2.5 rounded-lg bg-red-50 text-red-700 text-xs flex items-center gap-1.5 border border-red-200">
+              <div className="mt-3 p-2.5 rounded-lg bg-red-50 text-red-700 text-xs flex items-center gap-1.5 border border-red-200 font-medium">
                 <span className="material-symbols-outlined text-sm">error</span>
                 <span>{verificationError}</span>
               </div>

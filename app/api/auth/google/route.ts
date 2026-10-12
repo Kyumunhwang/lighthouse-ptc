@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { syncSheetsData } from "@/lib/sheets";
+import { syncSheetsData, matchTeacherRecord } from "@/lib/sheets";
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { email, name, roleOverride } = body;
+    const { email, name } = body;
 
-    if (!email) {
+    if (!email || !email.trim()) {
       return NextResponse.json(
-        { success: false, error: "Email is required" },
+        { success: false, error: "이메일 주소를 먼저 입력해 주세요." },
         { status: 400 }
       );
     }
@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
     const normalizedEmail = email.toLowerCase().trim();
     const { teacherEmails, teachers } = await syncSheetsData();
 
-    // Check if user is in teacher_email sheet
+    // Check if user is in teacher_email list (Admin or Teacher)
     const teacherMatch = teacherEmails.find(
       (t) => t.email.toLowerCase().trim() === normalizedEmail
     );
@@ -24,21 +24,18 @@ export async function POST(req: NextRequest) {
     let role: "운영자" | "교사" | "학부모" = "학부모";
     let matchedTeacherName: string | undefined = undefined;
 
-    if (roleOverride && ["운영자", "교사", "학부모"].includes(roleOverride)) {
-      role = roleOverride;
-    } else if (teacherMatch) {
+    if (teacherMatch) {
       role = teacherMatch.role;
       matchedTeacherName = teacherMatch.name;
     }
 
-    // If teacher role, verify corresponding teacher schedule entry
+    // If teacher role, find corresponding teacher schedule entry using robust matcher
     let teacherProfile = undefined;
-    if (role === "교사" && matchedTeacherName) {
-      teacherProfile = teachers.find(
-        (t) =>
-          t.nameKo.includes(matchedTeacherName!) ||
-          matchedTeacherName!.includes(t.nameKo) ||
-          t.nameEn.toLowerCase().includes(matchedTeacherName!.toLowerCase())
+    if (role === "교사") {
+      teacherProfile = matchTeacherRecord(
+        matchedTeacherName || name || "",
+        teachers,
+        normalizedEmail
       );
     }
 
@@ -46,7 +43,8 @@ export async function POST(req: NextRequest) {
       success: true,
       user: {
         email: normalizedEmail,
-        name: name || teacherMatch?.name || "Parent User",
+        name: teacherProfile?.nameEn || matchedTeacherName || name || normalizedEmail.split("@")[0],
+        displayNameKo: teacherProfile?.nameKo || matchedTeacherName || "",
         role,
         teacherProfile: teacherProfile || null,
       },
@@ -54,7 +52,7 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error("Auth API error:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Authentication failed" },
+      { success: false, error: error.message || "로그인 인증 처리 중 오류가 발생했습니다." },
       { status: 500 }
     );
   }

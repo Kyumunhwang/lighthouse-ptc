@@ -1,10 +1,16 @@
 /**
- * Google Sheets Adapter
- * Reads teacher, time, roster, and teacher_email sheets from the configured Google Spreadsheet.
- * Maintains local reservations store for instant sub-millisecond response & writes.
+ * Google Sheets + Persistent Storage (Supabase / Local JSON) Adapter
+ * Reads base teacher, time, roster, and teacher_email sheets from the configured Google Spreadsheet,
+ * and merges persistent overrides, reservations, blocked slots, and configuration from Supabase / local JSON.
  */
 
-import { getConfig } from "./config";
+import { getConfig, updateConfig } from "./config";
+import {
+  loadPersistentState,
+  savePersistentState,
+  PersistentOverrides,
+  PersistentStorePayload,
+} from "./persistence";
 
 export interface TeacherRecord {
   id: string;
@@ -61,26 +67,265 @@ export interface BlockedSlotRecord {
   createdAt: string;
 }
 
-// In-memory cache
 interface CachedSheetData {
+  baseTeachers: TeacherRecord[];
+  baseStudents: StudentRecord[];
+  baseTeacherEmails: TeacherEmailRecord[];
   teachers: TeacherRecord[];
   timeSlots: TimeSlotRecord[];
   students: StudentRecord[];
   teacherEmails: TeacherEmailRecord[];
   reservations: ReservationRecord[];
   blockedSlots: BlockedSlotRecord[];
+  overrides: PersistentOverrides;
   lastSyncedAt: number;
+  initializedFromStore: boolean;
 }
 
 const cache: CachedSheetData = {
+  baseTeachers: [],
+  baseStudents: [],
+  baseTeacherEmails: [],
   teachers: [],
   timeSlots: [],
   students: [],
   teacherEmails: [],
   reservations: [],
   blockedSlots: [],
+  overrides: {
+    upsertedTeachers: [],
+    deletedTeacherIds: [],
+    upsertedTeacherEmails: [],
+    deletedTeacherEmails: [],
+    upsertedStudents: [],
+    deletedStudentIds: [],
+  },
   lastSyncedAt: 0,
+  initializedFromStore: false,
 };
+
+/**
+ * Helper to strip honorifics (Mr., Ms., Mrs., Miss, Teacher, 선생님, etc.) and normalize name
+ */
+export function normalizeTeacherNameToken(name: string): string {
+  if (!name) return "";
+  return name
+    .replace(/^(mr\.?|ms\.?|mrs\.?|miss\.?|dr\.?|prof\.?)\s+/i, "")
+    .replace(/\s*(선생님|교사)\s*$/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * Robust matcher between a query name (from teacher_email or URL param) and a TeacherRecord
+ */
+export function matchTeacherRecord(
+  queryName: string,
+  teachers: TeacherRecord[],
+  emailHint?: string
+): TeacherRecord | undefined {
+  if (!teachers || teachers.length === 0) return undefined;
+
+  const qRaw = (queryName || "").trim();
+  const qClean = normalizeTeacherNameToken(qRaw);
+  const emailPrefix = emailHint ? emailHint.split("@")[0].toLowerCase().replace(/[^a-z]/g, "") : "";
+
+  // Known alias map for Lighthouse faculty where teacher_email uses Korean/nickname and teacher sheet uses formal name
+  const knownAliases: Record<string, string[]> = {
+    "피터": ["peter yoo", "유찬호"],
+    "유찬호": ["peter yoo", "피터"],
+    "다니엘": ["daniel kim", "다니엘"],
+    "유미연": ["monica yu"],
+    "이나라": ["nara lee"],
+    "이재원": ["jaewon lee"],
+    "김혜정": ["hyejeong kim", "hyejung kim"],
+    "박진희": ["jinhee park"],
+    "최규성": ["kyuseong choi"],
+    "류한나": ["hanna ryu", "hannah ryu"],
+    "심재희": ["jaehee shim"],
+    "이은실": ["eunsil lee"],
+    "노희진": ["heejin roh", "heejin noh"],
+    "오선민": ["sunmin oh", "seonmin oh"],
+    "김에스더": ["esther kim"],
+    "이주은": ["jueun lee", "jooeun lee"],
+    "정다움": ["daum jung", "daum jeong"],
+  };
+
+  // 1. Exact match on Korean name or English name
+  let found = teachers.find(
+    (t) =>
+      t.nameKo.trim() === qRaw ||
+      t.nameEn.trim().toLowerCase() === qRaw.toLowerCase() ||
+      normalizeTeacherNameToken(t.nameEn) === qClean
+  );
+  if (found) return found;
+
+  // 2. Check known aliases
+  const aliases = knownAliases[qRaw] || knownAliases[qClean] || [];
+  if (aliases.length > 0) {
+    found = teachers.find((t) => {
+      const enClean = normalizeTeacherNameToken(t.nameEn);
+      const koClean = t.nameKo.trim().toLowerCase();
+      return aliases.some((a) => enClean.includes(a) || koClean.includes(a));
+    });
+    if (found) return found;
+  }
+
+  // 3. Substring / token match on Korean or stripped English name
+  if (qClean.length >= 2) {
+    found = teachers.find((t) => {
+      const enClean = normalizeTeacherNameToken(t.nameEn);
+      const koClean = t.nameKo.trim().toLowerCase();
+      return (
+        (koClean && (koClean.includes(qClean) || qClean.includes(koClean))) ||
+        (enClean && (enClean.includes(qClean) || qClean.includes(enClean)))
+      );
+    });
+    if (found) return found;
+  }
+
+  // 4. Match using email prefix if provided (e.g. "king@liskorea.net" -> "leigh king")
+  if (emailPrefix && emailPrefix.length >= 3) {
+    found = teachers.find((t) => {
+      const enTokens = normalizeTeacherNameToken(t.nameEn).split(/\s+/);
+      return enTokens.some((tok) => tok.length >= 3 && emailPrefix.includes(tok));
+    });
+    if (found) return found;
+  }
+
+  return undefined;
+}
+
+/**
+ * Apply persistent overrides on top of base Google Sheet records
+ */
+function recomputeMergedRecords(): void {
+  const ov = cache.overrides;
+
+  // 1. Merge Teachers
+  const deletedTSet = new Set(ov.deletedTeacherIds || []);
+  const upsertedTMap = new Map<string, TeacherRecord>();
+  for (const t of ov.upsertedTeachers || []) {
+    upsertedTMap.set(t.id, t);
+  }
+
+  const mergedTeachers: TeacherRecord[] = [];
+  const seenTIds = new Set<string>();
+
+  for (const baseT of cache.baseTeachers) {
+    if (deletedTSet.has(baseT.id)) continue;
+    if (upsertedTMap.has(baseT.id)) {
+      mergedTeachers.push(upsertedTMap.get(baseT.id)!);
+      seenTIds.add(baseT.id);
+    } else {
+      mergedTeachers.push(baseT);
+      seenTIds.add(baseT.id);
+    }
+  }
+  for (const [id, customT] of upsertedTMap.entries()) {
+    if (!seenTIds.has(id) && !deletedTSet.has(id)) {
+      mergedTeachers.push(customT);
+    }
+  }
+  cache.teachers = mergedTeachers;
+
+  // 2. Merge Teacher/Admin Emails
+  const deletedESet = new Set((ov.deletedTeacherEmails || []).map((e) => e.toLowerCase().trim()));
+  const upsertedEMap = new Map<string, TeacherEmailRecord>();
+  for (const eRec of ov.upsertedTeacherEmails || []) {
+    upsertedEMap.set(eRec.email.toLowerCase().trim(), {
+      email: eRec.email.toLowerCase().trim(),
+      name: eRec.name.trim(),
+      role: eRec.role,
+    });
+  }
+
+  const mergedEmails: TeacherEmailRecord[] = [];
+  const seenEmails = new Set<string>();
+
+  for (const baseE of cache.baseTeacherEmails) {
+    const key = baseE.email.toLowerCase().trim();
+    if (deletedESet.has(key)) continue;
+    if (upsertedEMap.has(key)) {
+      mergedEmails.push(upsertedEMap.get(key)!);
+      seenEmails.add(key);
+    } else {
+      mergedEmails.push(baseE);
+      seenEmails.add(key);
+    }
+  }
+  for (const [key, customE] of upsertedEMap.entries()) {
+    if (!seenEmails.has(key) && !deletedESet.has(key)) {
+      mergedEmails.push(customE);
+    }
+  }
+  cache.teacherEmails = mergedEmails;
+
+  // 3. Merge Students (Roster)
+  const deletedSSet = new Set(ov.deletedStudentIds || []);
+  const upsertedSMap = new Map<string, StudentRecord>();
+  for (const s of ov.upsertedStudents || []) {
+    upsertedSMap.set(s.id, s);
+  }
+
+  const mergedStudents: StudentRecord[] = [];
+  const seenSIds = new Set<string>();
+
+  for (const baseS of cache.baseStudents) {
+    if (deletedSSet.has(baseS.id)) continue;
+    if (upsertedSMap.has(baseS.id)) {
+      mergedStudents.push(upsertedSMap.get(baseS.id)!);
+      seenSIds.add(baseS.id);
+    } else {
+      mergedStudents.push(baseS);
+      seenSIds.add(baseS.id);
+    }
+  }
+  for (const [id, customS] of upsertedSMap.entries()) {
+    if (!seenSIds.has(id) && !deletedSSet.has(id)) {
+      mergedStudents.push(customS);
+    }
+  }
+  cache.students = mergedStudents;
+}
+
+/**
+ * Persist current cache state to Supabase + Local JSON
+ */
+export async function persistCurrentState(): Promise<void> {
+  const payload: PersistentStorePayload = {
+    config: getConfig(),
+    reservations: cache.reservations,
+    blockedSlots: cache.blockedSlots,
+    overrides: cache.overrides,
+    updatedAt: new Date().toISOString(),
+  };
+  await savePersistentState(payload);
+}
+
+/**
+ * Load persistent state from Supabase / Local JSON into memory cache
+ */
+export async function hydrateFromPersistentStore(): Promise<void> {
+  const stored = await loadPersistentState();
+  if (stored.config) {
+    updateConfig(stored.config);
+  }
+  cache.reservations = Array.isArray(stored.reservations) ? stored.reservations : [];
+  cache.blockedSlots = Array.isArray(stored.blockedSlots) ? stored.blockedSlots : [];
+  cache.overrides = {
+    upsertedTeachers: stored.overrides?.upsertedTeachers || [],
+    deletedTeacherIds: stored.overrides?.deletedTeacherIds || [],
+    upsertedTeacherEmails: stored.overrides?.upsertedTeacherEmails || [],
+    deletedTeacherEmails: stored.overrides?.deletedTeacherEmails || [],
+    upsertedStudents: stored.overrides?.upsertedStudents || [],
+    deletedStudentIds: stored.overrides?.deletedStudentIds || [],
+  };
+  cache.initializedFromStore = true;
+  if (cache.baseTeachers.length > 0 || cache.baseStudents.length > 0) {
+    recomputeMergedRecords();
+  }
+}
 
 /**
  * Robust CSV Line Parser that handles quotes and commas correctly
@@ -98,7 +343,7 @@ function parseCsv(csvText: string): string[][] {
       if (char === '"') {
         if (insideQuotes && line[i + 1] === '"') {
           currentCell += '"';
-          i++; // Skip next quote
+          i++;
         } else {
           insideQuotes = !insideQuotes;
         }
@@ -132,12 +377,15 @@ async function fetchSheetCsv(sheetName: string, spreadsheetId: string): Promise<
 }
 
 /**
- * Synchronize and reload all sheets from Google Spreadsheet
+ * Synchronize and reload all sheets from Google Spreadsheet + Persistent Store
  */
 export async function syncSheetsData(force: boolean = false): Promise<CachedSheetData> {
+  // Always hydrate latest reservations/overrides from Supabase/local store so multi-instance/multi-device stays in sync
+  await hydrateFromPersistentStore();
+
   const now = Date.now();
-  // Cache for 60 seconds unless forced
-  if (!force && cache.lastSyncedAt > 0 && now - cache.lastSyncedAt < 60000 && cache.teachers.length > 0) {
+  if (!force && cache.lastSyncedAt > 0 && now - cache.lastSyncedAt < 60000 && cache.baseTeachers.length > 0) {
+    recomputeMergedRecords();
     return cache;
   }
 
@@ -151,8 +399,8 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
       fetchSheetCsv("teacher_email", spreadsheetId),
     ]);
 
-    // 1. Parse teachers
-    const teachers: TeacherRecord[] = [];
+    // 1. Parse base teachers
+    const baseTeachers: TeacherRecord[] = [];
     for (let i = 1; i < teacherRows.length; i++) {
       const row = teacherRows[i];
       if (!row || !row[0]) continue;
@@ -160,7 +408,7 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
       const nameKo = row[1] || "";
       const role = row[2] || "";
       const options = row.slice(3).filter((opt) => opt && opt.trim().length > 0);
-      teachers.push({
+      baseTeachers.push({
         id: `t_${i}_${nameEn.replace(/\s+/g, "_")}`,
         nameEn,
         nameKo,
@@ -183,12 +431,12 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
       });
     }
 
-    // 3. Parse roster (students)
-    const students: StudentRecord[] = [];
+    // 3. Parse base roster (students)
+    const baseStudents: StudentRecord[] = [];
     for (let i = 1; i < rosterRows.length; i++) {
       const row = rosterRows[i];
       if (!row || !row[1]) continue;
-      students.push({
+      baseStudents.push({
         id: `stu_${i}`,
         grade: row[0] || "",
         studentNameKo: row[1] || "",
@@ -198,8 +446,8 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
       });
     }
 
-    // 4. Parse teacher_email
-    const teacherEmails: TeacherEmailRecord[] = [];
+    // 4. Parse base teacher_email
+    const baseTeacherEmails: TeacherEmailRecord[] = [];
     for (let i = 1; i < emailRows.length; i++) {
       const row = emailRows[i];
       if (!row || !row[0]) continue;
@@ -207,19 +455,20 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
       const name = row[1] || "";
       const rawRole = (row[2] || "").trim();
       const role = rawRole.includes("운영자") ? "운영자" : "교사";
-      teacherEmails.push({ email, name, role });
+      baseTeacherEmails.push({ email, name, role });
     }
 
-    cache.teachers = teachers;
+    cache.baseTeachers = baseTeachers;
     cache.timeSlots = timeSlots;
-    cache.students = students;
-    cache.teacherEmails = teacherEmails;
+    cache.baseStudents = baseStudents;
+    cache.baseTeacherEmails = baseTeacherEmails;
     cache.lastSyncedAt = now;
+
+    recomputeMergedRecords();
 
     return cache;
   } catch (error) {
     console.error("Error syncing Google Sheets data:", error);
-    // If cache already has data, return it fallback
     if (cache.teachers.length > 0) return cache;
     throw error;
   }
@@ -240,40 +489,449 @@ export function getReservationByToken(token: string): ReservationRecord | undefi
 }
 
 /**
- * Add a confirmed reservation to the store
+ * Add confirmed reservation(s) and persist immediately
  */
-export function addReservation(reservation: ReservationRecord): void {
+export async function addReservation(reservation: ReservationRecord): Promise<void> {
   cache.reservations.push(reservation);
+  await persistCurrentState();
+}
+
+export async function addMultipleReservations(records: ReservationRecord[]): Promise<void> {
+  cache.reservations.push(...records);
+  await persistCurrentState();
 }
 
 /**
  * Cancel or update reservation status
  */
-export function updateReservationStatus(id: string, status: "CONFIRMED" | "CANCELLED"): boolean {
+export async function updateReservationStatus(
+  id: string,
+  status: "CONFIRMED" | "CANCELLED"
+): Promise<boolean> {
+  await hydrateFromPersistentStore();
   const item = cache.reservations.find((r) => r.id === id);
   if (item) {
     item.status = status;
+    await persistCurrentState();
     return true;
   }
   return false;
 }
 
 /**
- * Add / Update / Delete teachers dynamically (Admin Console Feature)
+ * Delete a single reservation permanently
  */
-export function adminAddTeacher(teacher: TeacherRecord): void {
-  cache.teachers.push(teacher);
-}
-
-export function adminDeleteTeacher(teacherId: string): void {
-  cache.teachers = cache.teachers.filter((t) => t.id !== teacherId);
-}
-
-export function adminUpdateTeacher(updated: TeacherRecord): void {
-  const index = cache.teachers.findIndex((t) => t.id === updated.id);
-  if (index !== -1) {
-    cache.teachers[index] = updated;
+export async function deleteReservationById(id: string): Promise<boolean> {
+  await hydrateFromPersistentStore();
+  const before = cache.reservations.length;
+  cache.reservations = cache.reservations.filter((r) => r.id !== id);
+  if (cache.reservations.length !== before) {
+    await persistCurrentState();
+    return true;
   }
+  return false;
+}
+
+/**
+ * Clear ALL reservations (Beta Test Reset Feature)
+ */
+export async function clearAllReservations(): Promise<number> {
+  await hydrateFromPersistentStore();
+  const count = cache.reservations.length;
+  cache.reservations = [];
+  await persistCurrentState();
+  return count;
+}
+
+/**
+ * Teacher CRUD (Admin Console Feature - Persisted in Overrides)
+ */
+export async function adminAddTeacher(teacher: TeacherRecord): Promise<void> {
+  await hydrateFromPersistentStore();
+  cache.overrides.deletedTeacherIds = cache.overrides.deletedTeacherIds.filter(
+    (id) => id !== teacher.id
+  );
+  const idx = cache.overrides.upsertedTeachers.findIndex((t) => t.id === teacher.id);
+  if (idx >= 0) {
+    cache.overrides.upsertedTeachers[idx] = teacher;
+  } else {
+    cache.overrides.upsertedTeachers.push(teacher);
+  }
+  recomputeMergedRecords();
+  await persistCurrentState();
+}
+
+export async function adminUpdateTeacher(updated: TeacherRecord): Promise<void> {
+  await adminAddTeacher(updated);
+}
+
+export async function adminDeleteTeacher(teacherId: string): Promise<void> {
+  await hydrateFromPersistentStore();
+  cache.overrides.upsertedTeachers = cache.overrides.upsertedTeachers.filter(
+    (t) => t.id !== teacherId
+  );
+  if (!cache.overrides.deletedTeacherIds.includes(teacherId)) {
+    cache.overrides.deletedTeacherIds.push(teacherId);
+  }
+  recomputeMergedRecords();
+  await persistCurrentState();
+}
+
+/**
+ * Admin / Teacher Email Role CRUD (운영자 및 교사 계정 관리)
+ */
+export async function adminUpsertTeacherEmail(record: TeacherEmailRecord, previousEmail?: string): Promise<void> {
+  await hydrateFromPersistentStore();
+  const normEmail = record.email.toLowerCase().trim();
+  const cleanRecord: TeacherEmailRecord = {
+    email: normEmail,
+    name: record.name.trim(),
+    role: record.role,
+  };
+
+  if (previousEmail && previousEmail.toLowerCase().trim() !== normEmail) {
+    const oldNorm = previousEmail.toLowerCase().trim();
+    cache.overrides.upsertedTeacherEmails = cache.overrides.upsertedTeacherEmails.filter(
+      (e) => e.email.toLowerCase().trim() !== oldNorm
+    );
+    if (!cache.overrides.deletedTeacherEmails.includes(oldNorm)) {
+      cache.overrides.deletedTeacherEmails.push(oldNorm);
+    }
+  }
+
+  cache.overrides.deletedTeacherEmails = cache.overrides.deletedTeacherEmails.filter(
+    (e) => e.toLowerCase().trim() !== normEmail
+  );
+
+  const idx = cache.overrides.upsertedTeacherEmails.findIndex(
+    (e) => e.email.toLowerCase().trim() === normEmail
+  );
+  if (idx >= 0) {
+    cache.overrides.upsertedTeacherEmails[idx] = cleanRecord;
+  } else {
+    cache.overrides.upsertedTeacherEmails.push(cleanRecord);
+  }
+
+  recomputeMergedRecords();
+  await persistCurrentState();
+}
+
+export async function adminDeleteTeacherEmail(email: string): Promise<void> {
+  await hydrateFromPersistentStore();
+  const normEmail = email.toLowerCase().trim();
+  cache.overrides.upsertedTeacherEmails = cache.overrides.upsertedTeacherEmails.filter(
+    (e) => e.email.toLowerCase().trim() !== normEmail
+  );
+  if (!cache.overrides.deletedTeacherEmails.includes(normEmail)) {
+    cache.overrides.deletedTeacherEmails.push(normEmail);
+  }
+  recomputeMergedRecords();
+  await persistCurrentState();
+}
+
+/**
+ * Student & Parent Roster CRUD (학생 및 학부모 명부 관리)
+ */
+export async function adminUpsertStudent(student: StudentRecord): Promise<void> {
+  await hydrateFromPersistentStore();
+  cache.overrides.deletedStudentIds = cache.overrides.deletedStudentIds.filter(
+    (id) => id !== student.id
+  );
+  const idx = cache.overrides.upsertedStudents.findIndex((s) => s.id === student.id);
+  if (idx >= 0) {
+    cache.overrides.upsertedStudents[idx] = student;
+  } else {
+    cache.overrides.upsertedStudents.push(student);
+  }
+  recomputeMergedRecords();
+  await persistCurrentState();
+}
+
+export async function adminDeleteStudent(studentId: string): Promise<void> {
+  await hydrateFromPersistentStore();
+  cache.overrides.upsertedStudents = cache.overrides.upsertedStudents.filter(
+    (s) => s.id !== studentId
+  );
+  if (!cache.overrides.deletedStudentIds.includes(studentId)) {
+    cache.overrides.deletedStudentIds.push(studentId);
+  }
+  recomputeMergedRecords();
+  await persistCurrentState();
+}
+
+/**
+ * Promote all students by 1 grade:
+ * M6 -> M7, M7 -> M8, M8 -> H9, H9 -> H10, H10 -> H11, H11 -> H12, H12 -> Graduated (Deleted)
+ */
+export async function adminPromoteStudents(): Promise<{
+  promotedCount: number;
+  graduatedCount: number;
+}> {
+  await syncSheetsData(false);
+
+  const promotionMap: Record<string, string> = {
+    M6: "M7",
+    M7: "M8",
+    M8: "H9",
+    H9: "H10",
+    H10: "H11",
+    H11: "H12",
+    // Also support G-prefixed variants if any exist
+    G6: "M7",
+    G7: "M8",
+    G8: "H9",
+    G9: "H10",
+    G10: "H11",
+    G11: "H12",
+  };
+
+  let promotedCount = 0;
+  let graduatedCount = 0;
+
+  const currentList = [...cache.students];
+  const nextUpserted: StudentRecord[] = [];
+  const nextDeletedSet = new Set<string>(cache.overrides.deletedStudentIds || []);
+
+  for (const stu of currentList) {
+    const cleanGrade = (stu.grade || "").trim().toUpperCase();
+    if (cleanGrade === "H12" || cleanGrade === "G12") {
+      // Graduated -> delete
+      graduatedCount++;
+      nextDeletedSet.add(stu.id);
+    } else if (promotionMap[cleanGrade]) {
+      promotedCount++;
+      nextDeletedSet.delete(stu.id);
+      nextUpserted.push({
+        ...stu,
+        grade: promotionMap[cleanGrade],
+      });
+    } else {
+      // Keep unchanged
+      nextDeletedSet.delete(stu.id);
+      nextUpserted.push({ ...stu });
+    }
+  }
+
+  cache.overrides.upsertedStudents = nextUpserted;
+  cache.overrides.deletedStudentIds = Array.from(nextDeletedSet);
+  recomputeMergedRecords();
+  await persistCurrentState();
+
+  return { promotedCount, graduatedCount };
+}
+
+/**
+ * Bulk Upload Students from CSV (merge or replace mode)
+ */
+export async function adminBulkUploadStudents(
+  records: Omit<StudentRecord, "id">[],
+  mode: "merge" | "replace" = "merge"
+): Promise<{ count: number }> {
+  await syncSheetsData(false);
+
+  if (mode === "replace") {
+    const allDeleted = new Set<string>(cache.overrides.deletedStudentIds || []);
+    for (const s of cache.baseStudents) {
+      allDeleted.add(s.id);
+    }
+    for (const s of cache.students) {
+      allDeleted.add(s.id);
+    }
+    cache.overrides.deletedStudentIds = Array.from(allDeleted);
+    cache.overrides.upsertedStudents = records.map((r, i) => ({
+      id: `stu_csv_${Date.now()}_${i}`,
+      grade: (r.grade || "").trim(),
+      studentNameKo: (r.studentNameKo || "").trim(),
+      studentNameEn: (r.studentNameEn || "").trim(),
+      parentFather: (r.parentFather || "").trim(),
+      parentMother: (r.parentMother || "").trim(),
+    }));
+  } else {
+    // Merge mode: update if matching grade + studentNameKo (or studentNameKo + studentNameEn), else insert
+    const currentMap = new Map<string, StudentRecord>();
+    for (const s of cache.students) {
+      currentMap.set(s.id, { ...s });
+    }
+
+    let idx = 0;
+    for (const r of records) {
+      const g = (r.grade || "").trim();
+      const ko = (r.studentNameKo || "").trim();
+      const en = (r.studentNameEn || "").trim();
+      if (!g || !ko) continue;
+
+      const existing = Array.from(currentMap.values()).find(
+        (s) =>
+          s.studentNameKo.trim() === ko &&
+          (s.grade.trim().toUpperCase() === g.toUpperCase() ||
+            (en && s.studentNameEn.trim().toLowerCase() === en.toLowerCase()))
+      );
+
+      if (existing) {
+        currentMap.set(existing.id, {
+          ...existing,
+          grade: g,
+          studentNameKo: ko,
+          studentNameEn: en || existing.studentNameEn,
+          parentFather: (r.parentFather || "").trim() || existing.parentFather,
+          parentMother: (r.parentMother || "").trim() || existing.parentMother,
+        });
+        cache.overrides.deletedStudentIds = cache.overrides.deletedStudentIds.filter(
+          (id) => id !== existing.id
+        );
+      } else {
+        const newId = `stu_csv_${Date.now()}_${idx++}`;
+        currentMap.set(newId, {
+          id: newId,
+          grade: g,
+          studentNameKo: ko,
+          studentNameEn: en,
+          parentFather: (r.parentFather || "").trim(),
+          parentMother: (r.parentMother || "").trim(),
+        });
+      }
+    }
+
+    cache.overrides.upsertedStudents = Array.from(currentMap.values());
+  }
+
+  recomputeMergedRecords();
+  await persistCurrentState();
+  return { count: cache.students.length };
+}
+
+/**
+ * Bulk Upload Admin / Teacher Account Emails from CSV (merge or replace mode)
+ */
+export async function adminBulkUploadTeacherEmails(
+  records: TeacherEmailRecord[],
+  mode: "merge" | "replace" = "merge"
+): Promise<{ count: number }> {
+  await syncSheetsData(false);
+
+  if (mode === "replace") {
+    const allDeleted = new Set<string>(cache.overrides.deletedTeacherEmails || []);
+    for (const e of cache.baseTeacherEmails) {
+      allDeleted.add(e.email.toLowerCase().trim());
+    }
+    for (const e of cache.teacherEmails) {
+      allDeleted.add(e.email.toLowerCase().trim());
+    }
+    const cleanRecords: TeacherEmailRecord[] = [];
+    for (const r of records) {
+      const em = (r.email || "").toLowerCase().trim();
+      const nm = (r.name || "").trim();
+      if (!em || !nm) continue;
+      allDeleted.delete(em);
+      cleanRecords.push({
+        email: em,
+        name: nm,
+        role: (r.role || "").includes("운영자") ? "운영자" : "교사",
+      });
+    }
+    cache.overrides.deletedTeacherEmails = Array.from(allDeleted);
+    cache.overrides.upsertedTeacherEmails = cleanRecords;
+  } else {
+    for (const r of records) {
+      const em = (r.email || "").toLowerCase().trim();
+      const nm = (r.name || "").trim();
+      if (!em || !nm) continue;
+      const role: "운영자" | "교사" = (r.role || "").includes("운영자") ? "운영자" : "교사";
+      cache.overrides.deletedTeacherEmails = cache.overrides.deletedTeacherEmails.filter(
+        (d) => d.toLowerCase().trim() !== em
+      );
+      const idx = cache.overrides.upsertedTeacherEmails.findIndex(
+        (u) => u.email.toLowerCase().trim() === em
+      );
+      if (idx >= 0) {
+        cache.overrides.upsertedTeacherEmails[idx] = { email: em, name: nm, role };
+      } else {
+        cache.overrides.upsertedTeacherEmails.push({ email: em, name: nm, role });
+      }
+    }
+  }
+
+  recomputeMergedRecords();
+  await persistCurrentState();
+  return { count: cache.teacherEmails.length };
+}
+
+/**
+ * Bulk Upload Consultation Teachers & Options from CSV (merge or replace mode)
+ */
+export async function adminBulkUploadTeachers(
+  records: Omit<TeacherRecord, "id">[],
+  mode: "merge" | "replace" = "merge"
+): Promise<{ count: number }> {
+  await syncSheetsData(false);
+
+  if (mode === "replace") {
+    const allDeleted = new Set<string>(cache.overrides.deletedTeacherIds || []);
+    for (const t of cache.baseTeachers) {
+      allDeleted.add(t.id);
+    }
+    for (const t of cache.teachers) {
+      allDeleted.add(t.id);
+    }
+    cache.overrides.deletedTeacherIds = Array.from(allDeleted);
+    cache.overrides.upsertedTeachers = records
+      .filter((r) => (r.nameEn || "").trim() || (r.nameKo || "").trim())
+      .map((r, i) => ({
+        id: `t_csv_${Date.now()}_${i}`,
+        nameEn: (r.nameEn || "").trim(),
+        nameKo: (r.nameKo || "").trim(),
+        role: (r.role || "").trim(),
+        options: (r.options || []).map((o) => o.trim()).filter(Boolean).slice(0, 8),
+      }));
+  } else {
+    const currentMap = new Map<string, TeacherRecord>();
+    for (const t of cache.teachers) {
+      currentMap.set(t.id, { ...t });
+    }
+
+    let idx = 0;
+    for (const r of records) {
+      const en = (r.nameEn || "").trim();
+      const ko = (r.nameKo || "").trim();
+      if (!en && !ko) continue;
+
+      const existing = Array.from(currentMap.values()).find(
+        (t) =>
+          (en && t.nameEn.trim().toLowerCase() === en.toLowerCase()) ||
+          (ko && t.nameKo.trim() === ko)
+      );
+
+      const cleanOptions = (r.options || []).map((o) => o.trim()).filter(Boolean).slice(0, 8);
+
+      if (existing) {
+        currentMap.set(existing.id, {
+          ...existing,
+          nameEn: en || existing.nameEn,
+          nameKo: ko || existing.nameKo,
+          role: (r.role || "").trim() || existing.role,
+          options: cleanOptions.length > 0 ? cleanOptions : existing.options,
+        });
+        cache.overrides.deletedTeacherIds = cache.overrides.deletedTeacherIds.filter(
+          (id) => id !== existing.id
+        );
+      } else {
+        const newId = `t_csv_${Date.now()}_${idx++}`;
+        currentMap.set(newId, {
+          id: newId,
+          nameEn: en,
+          nameKo: ko,
+          role: (r.role || "").trim(),
+          options: cleanOptions,
+        });
+      }
+    }
+
+    cache.overrides.upsertedTeachers = Array.from(currentMap.values());
+  }
+
+  recomputeMergedRecords();
+  await persistCurrentState();
+  return { count: cache.teachers.length };
 }
 
 /**
@@ -283,19 +941,28 @@ export function getBlockedSlots(): BlockedSlotRecord[] {
   return cache.blockedSlots;
 }
 
-export function addBlockedSlot(item: BlockedSlotRecord): void {
+export async function addBlockedSlot(item: BlockedSlotRecord): Promise<void> {
+  await hydrateFromPersistentStore();
   cache.blockedSlots.push(item);
+  await persistCurrentState();
 }
 
-export function deleteBlockedSlot(id: string): void {
+export async function deleteBlockedSlot(id: string): Promise<void> {
+  await hydrateFromPersistentStore();
   cache.blockedSlots = cache.blockedSlots.filter((b) => b.id !== id);
+  await persistCurrentState();
 }
 
 export function isSlotBlocked(teacherName: string, timeSlot: string, date: string): boolean {
   return cache.blockedSlots.some((b) => {
-    const teacherMatches = b.teacherName === "ALL" || b.teacherName.trim().toLowerCase() === teacherName.trim().toLowerCase();
-    const dateMatches = b.date === "ALL" || b.date.trim().toLowerCase() === date.trim().toLowerCase();
-    const timeMatches = b.timeSlot === "ALL" || b.timeSlot.trim().toLowerCase() === timeSlot.trim().toLowerCase();
+    const teacherMatches =
+      b.teacherName === "ALL" ||
+      b.teacherName.trim().toLowerCase() === teacherName.trim().toLowerCase();
+    const dateMatches =
+      b.date === "ALL" || b.date.trim().toLowerCase() === date.trim().toLowerCase();
+    const timeMatches =
+      b.timeSlot === "ALL" || b.timeSlot.trim().toLowerCase() === timeSlot.trim().toLowerCase();
     return teacherMatches && dateMatches && timeMatches;
   });
 }
+

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   getReservations,
-  addReservation,
+  addMultipleReservations,
   updateReservationStatus,
+  deleteReservationById,
+  clearAllReservations,
   getReservationByToken,
+  hydrateFromPersistentStore,
   isSlotBlocked,
   ReservationRecord,
 } from "@/lib/sheets";
@@ -12,12 +15,13 @@ import { slotLockManager } from "@/lib/lock";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
+  await hydrateFromPersistentStore();
   const token = req.nextUrl.searchParams.get("token");
   if (token) {
     const item = getReservationByToken(token);
     if (!item) {
       return NextResponse.json(
-        { success: false, error: "Reservation not found" },
+        { success: false, error: "해당 예약 확인증을 찾을 수 없습니다." },
         { status: 404 }
       );
     }
@@ -30,7 +34,27 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    await hydrateFromPersistentStore();
     const body = await req.json();
+
+    // Support admin actions via POST as well (e.g., CLEAR_ALL, CANCEL_ONE)
+    if (body.action === "CLEAR_ALL") {
+      const removedCount = await clearAllReservations();
+      return NextResponse.json({
+        success: true,
+        message: `전체 예약 내역(${removedCount}건)이 모두 초기화되었습니다.`,
+        removedCount,
+      });
+    }
+
+    if (body.action === "CANCEL_ONE" && body.id) {
+      const deleted = await deleteReservationById(body.id);
+      return NextResponse.json({
+        success: deleted,
+        message: deleted ? "해당 상담 예약이 취소(삭제)되었습니다." : "예약 내역을 찾을 수 없습니다.",
+      });
+    }
+
     const {
       email,
       studentGrade,
@@ -41,14 +65,14 @@ export async function POST(req: NextRequest) {
 
     if (!studentName || !parentName || !bookings || !Array.isArray(bookings)) {
       return NextResponse.json(
-        { success: false, error: "Missing required booking details" },
+        { success: false, error: "필수 예약 정보(학생명, 학부모 성함, 선택 시간)가 누락되었습니다." },
         { status: 400 }
       );
     }
 
     if (bookings.length > 4) {
       return NextResponse.json(
-        { success: false, error: "Maximum 4 booking slots allowed per student" },
+        { success: false, error: "학생 1인당 최대 4개 상담교과까지만 예약할 수 있습니다." },
         { status: 400 }
       );
     }
@@ -110,7 +134,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           {
             success: false,
-            error: `Slot for ${b.teacherName} at ${b.timeSlot} (${b.date}) has just been reserved by another parent. Please choose another time.`,
+            error: `선택하신 ${b.teacherName} 선생님의 ${b.date} ${b.timeSlot} 상담 시간은 방금 다른 학부모님께서 먼저 예약하셨습니다. 다른 시간대를 선택해 주세요.`,
             conflictSlot: b,
           },
           { status: 409 }
@@ -126,7 +150,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           {
             success: false,
-            error: `Slot for ${b.teacherName} at ${b.timeSlot} (${b.date}) is currently being selected by another user. Please choose another time.`,
+            error: `선택하신 ${b.teacherName} 선생님의 ${b.date} ${b.timeSlot} 상담 시간은 현재 다른 학부모님께서 예약 진행 중입니다. 다른 시간대를 선택해 주세요.`,
             conflictSlot: b,
           },
           { status: 409 }
@@ -157,10 +181,11 @@ export async function POST(req: NextRequest) {
         uniqueToken,
       };
 
-      addReservation(record);
       createdRecords.push(record);
       createdTokens.push(uniqueToken);
     }
+
+    await addMultipleReservations(createdRecords);
 
     // Release temporary locks after committing
     for (const lock of acquiredLocks) {
@@ -169,14 +194,14 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: "Reservations confirmed successfully",
+      message: "상담 예약이 정상적으로 확정되었습니다.",
       reservations: createdRecords,
       masterToken: createdTokens[0], // Primary token for the slip view
     });
   } catch (error: any) {
     console.error("Booking error:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Failed to process booking" },
+      { success: false, error: error.message || "예약 처리 중 오류가 발생했습니다." },
       { status: 500 }
     );
   }
@@ -184,12 +209,21 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
-    const { id } = await req.json();
-    if (!id) {
-      return NextResponse.json({ success: false, error: "ID required" }, { status: 400 });
+    const body = await req.json();
+    if (body.clearAll) {
+      const count = await clearAllReservations();
+      return NextResponse.json({ success: true, removedCount: count });
     }
-    const success = updateReservationStatus(id, "CANCELLED");
-    return NextResponse.json({ success });
+    const { id } = body;
+    if (!id) {
+      return NextResponse.json({ success: false, error: "예약 ID가 필요합니다." }, { status: 400 });
+    }
+    const success = await deleteReservationById(id);
+    if (!success) {
+      const updated = await updateReservationStatus(id, "CANCELLED");
+      return NextResponse.json({ success: updated });
+    }
+    return NextResponse.json({ success: true });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

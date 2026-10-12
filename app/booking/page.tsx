@@ -86,7 +86,7 @@ export default function SlotBookingPage() {
           }
         }
       } catch (err: any) {
-        setErrorMessage("Failed to load school schedules.");
+        setErrorMessage("학교 상담 일정표를 불러오는 중 오류가 발생했습니다.");
       } finally {
         setLoading(false);
       }
@@ -199,7 +199,7 @@ export default function SlotBookingPage() {
       setErrorMessage(
         studentConfirmedCount > 0
           ? `해당 학생은 이미 ${studentConfirmedCount}개의 예약이 확정되어 있어, 추가로 최대 ${maxSelectable}개까지만 선택할 수 있습니다. (학생 1인당 총 4개 제한)`
-          : "최대 4개 상담 항목까지만 선택할 수 있습니다. (Quota limit reached: 4/4)"
+          : "학생 1인당 최대 4개 상담교과까지만 선택할 수 있습니다."
       );
       return;
     }
