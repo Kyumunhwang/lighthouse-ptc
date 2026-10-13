@@ -376,6 +376,27 @@ async function fetchSheetCsv(sheetName: string, spreadsheetId: string): Promise<
   return parseCsv(text);
 }
 
+export function parseTimeSlotMinutes(timeStr: string): number {
+  if (!timeStr) return 9999;
+  const match = timeStr.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return 9999;
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const isPm = /pm/i.test(timeStr);
+  const isAm = /am/i.test(timeStr);
+  if (isPm && hours < 12) hours += 12;
+  if (isAm && hours === 12) hours = 0;
+  if (!isPm && !isAm && hours >= 1 && hours <= 7) hours += 12;
+  return hours * 60 + minutes;
+}
+
+export const REQUIRED_EXTRA_TIME_SLOTS: TimeSlotRecord[] = [
+  { id: "time_extra_oct30_120", day: "목요일", time: "1:20-1:50pm", date: "Oct. 30", comment: "" },
+  { id: "time_extra_nov01_120", day: "금요일", time: "1:20-1:50pm", date: "Nov. 1", comment: "" },
+  { id: "time_extra_oct30_510", day: "목요일", time: "5:10-5:30pm", date: "Oct. 30", comment: "" },
+  { id: "time_extra_nov01_510", day: "금요일", time: "5:10-5:30pm", date: "Nov. 1", comment: "" },
+];
+
 /**
  * Synchronize and reload all sheets from Google Spreadsheet + Persistent Store
  */
@@ -417,19 +438,39 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
       });
     }
 
-    // 2. Parse time slots
-    const timeSlots: TimeSlotRecord[] = [];
+    // 2. Parse time slots and guarantee required slots (1:20-1:50pm, 5:10-5:30pm for Oct. 30 & Nov. 1)
+    const timeSlotMap = new Map<string, TimeSlotRecord>();
     for (let i = 1; i < timeRows.length; i++) {
       const row = timeRows[i];
       if (!row || !row[1]) continue;
-      timeSlots.push({
+      const day = (row[0] || "").trim();
+      const time = (row[1] || "").trim();
+      const date = (row[2] || "").trim();
+      const comment = (row[3] || "").trim();
+      const key = `${date}__${time}`.toLowerCase();
+      timeSlotMap.set(key, {
         id: `time_${i}`,
-        day: row[0] || "",
-        time: row[1] || "",
-        date: row[2] || "",
-        comment: row[3] || "",
+        day,
+        time,
+        date,
+        comment,
       });
     }
+
+    // Merge required extra slots if missing in Google Sheets
+    for (const reqSlot of REQUIRED_EXTRA_TIME_SLOTS) {
+      const key = `${reqSlot.date}__${reqSlot.time}`.toLowerCase();
+      if (!timeSlotMap.has(key)) {
+        timeSlotMap.set(key, reqSlot);
+      }
+    }
+
+    const timeSlots = Array.from(timeSlotMap.values()).sort((a, b) => {
+      if (a.date !== b.date) {
+        return a.date.localeCompare(b.date);
+      }
+      return parseTimeSlotMinutes(a.time) - parseTimeSlotMinutes(b.time);
+    });
 
     // 3. Parse base roster (students)
     const baseStudents: StudentRecord[] = [];

@@ -1132,6 +1132,20 @@ export default function AdminConsolePage() {
       ? matrixSelectedDate
       : matrixDates[0] || "";
 
+  const parseTimeSlotMinutes = (timeStr: string): number => {
+    if (!timeStr) return 9999;
+    const match = timeStr.match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return 9999;
+    let hours = parseInt(match[1], 10);
+    const minutes = parseInt(match[2], 10);
+    const isPm = /pm/i.test(timeStr);
+    const isAm = /am/i.test(timeStr);
+    if (isPm && hours < 12) hours += 12;
+    if (isAm && hours === 12) hours = 0;
+    if (!isPm && !isAm && hours >= 1 && hours <= 7) hours += 12;
+    return hours * 60 + minutes;
+  };
+
   const matrixTimeSlots = useMemo(() => {
     if (!activeDate) return [];
     const slotsForDate = timeSlots.filter((t) => (t?.date || "").trim() === activeDate.trim());
@@ -1143,7 +1157,7 @@ export default function AdminConsolePage() {
         distinct.push(s);
       }
     }
-    return distinct;
+    return distinct.sort((a, b) => parseTimeSlotMinutes(a.time) - parseTimeSlotMinutes(b.time));
   }, [timeSlots, activeDate]);
 
   const formatStartTime = (timeStr?: string) => {

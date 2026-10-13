@@ -99,9 +99,25 @@ export default function SlotBookingPage() {
     return Array.from(new Set(timeSlots.map((t) => t.date))).filter(Boolean);
   }, [timeSlots]);
 
-  // Filtered Time Slots for selected date
+  const parseTimeSlotMinutes = (timeStr: string): number => {
+    if (!timeStr) return 9999;
+    const match = timeStr.match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return 9999;
+    let hours = parseInt(match[1], 10);
+    const minutes = parseInt(match[2], 10);
+    const isPm = /pm/i.test(timeStr);
+    const isAm = /am/i.test(timeStr);
+    if (isPm && hours < 12) hours += 12;
+    if (isAm && hours === 12) hours = 0;
+    if (!isPm && !isAm && hours >= 1 && hours <= 7) hours += 12;
+    return hours * 60 + minutes;
+  };
+
+  // Filtered Time Slots for selected date (sorted chronologically)
   const filteredSlots = useMemo(() => {
-    return timeSlots.filter((t) => t.date === selectedDate);
+    return [...timeSlots]
+      .filter((t) => t.date === selectedDate)
+      .sort((a, b) => parseTimeSlotMinutes(a.time) - parseTimeSlotMinutes(b.time));
   }, [timeSlots, selectedDate]);
 
   // Already confirmed reservations for THIS student (locked; cannot be cancelled by parent)
