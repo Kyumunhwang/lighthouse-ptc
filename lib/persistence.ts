@@ -61,9 +61,18 @@ const DEFAULT_PAYLOAD: PersistentStorePayload = {
   updatedAt: new Date().toISOString(),
 };
 
+const DEFAULT_SUPABASE_URL = "https://dwpxdsmopnvtofnycuyd.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY = "sb_publishable_dLr8TEhDAnGnvpNNkoruoQ_Axq-efBB";
+
 // Runtime Supabase connection cache
-let runtimeSupabaseUrl: string = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
-let runtimeSupabaseKey: string = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+let runtimeSupabaseUrl: string =
+  process.env.NEXT_PUBLIC_SUPABASE_URL ||
+  process.env.SUPABASE_URL ||
+  DEFAULT_SUPABASE_URL;
+let runtimeSupabaseKey: string =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  DEFAULT_SUPABASE_ANON_KEY;
 
 /**
  * Resolve writable local file path for fallback persistence
@@ -153,23 +162,29 @@ export function getSupabaseStatus(): {
   if (!runtimeSupabaseUrl || !runtimeSupabaseKey) {
     readLocalStore();
   }
-  const envUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || "";
-  const envKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "";
+  const envUrl =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.SUPABASE_URL ||
+    DEFAULT_SUPABASE_URL;
+  const envKey =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    DEFAULT_SUPABASE_ANON_KEY;
 
+  if (runtimeSupabaseUrl && runtimeSupabaseKey && runtimeSupabaseUrl !== envUrl) {
+    return {
+      connected: true,
+      supabaseUrl: runtimeSupabaseUrl,
+      hasAnonKey: true,
+      source: "runtime",
+    };
+  }
   if (envUrl && envKey) {
     return {
       connected: true,
       supabaseUrl: envUrl,
       hasAnonKey: true,
       source: "env",
-    };
-  }
-  if (runtimeSupabaseUrl && runtimeSupabaseKey) {
-    return {
-      connected: true,
-      supabaseUrl: runtimeSupabaseUrl,
-      hasAnonKey: true,
-      source: "runtime",
     };
   }
   return {
@@ -180,6 +195,21 @@ export function getSupabaseStatus(): {
   };
 }
 
+function buildSupabaseHeaders(
+  key: string,
+  extra?: Record<string, string>
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    apikey: key,
+    "Content-Type": "application/json",
+    ...(extra || {}),
+  };
+  if (key.startsWith("eyJ")) {
+    headers["Authorization"] = `Bearer ${key}`;
+  }
+  return headers;
+}
+
 /**
  * Load state from Supabase REST API (`ptc_state` table, row id = 'default')
  * Falls back to local JSON store if Supabase is not configured or unreachable.
@@ -187,7 +217,7 @@ export function getSupabaseStatus(): {
 export async function loadPersistentState(): Promise<PersistentStorePayload> {
   const localData = readLocalStore();
   const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || runtimeSupabaseUrl || "").replace(/\/+$/, "");
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || runtimeSupabaseKey || "";
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || runtimeSupabaseKey || "";
 
   if (!url || !key) {
     return localData;
@@ -197,11 +227,7 @@ export async function loadPersistentState(): Promise<PersistentStorePayload> {
     const endpoint = `${url}/rest/v1/ptc_state?id=eq.default&select=payload,updated_at`;
     const resp = await fetch(endpoint, {
       method: "GET",
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
+      headers: buildSupabaseHeaders(key),
       cache: "no-store",
     });
 
@@ -252,7 +278,7 @@ export async function savePersistentState(payload: PersistentStorePayload): Prom
   writeLocalStore(payload);
 
   const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || runtimeSupabaseUrl || "").replace(/\/+$/, "");
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || runtimeSupabaseKey || "";
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || runtimeSupabaseKey || "";
 
   if (!url || !key) {
     return false;
@@ -271,12 +297,9 @@ export async function savePersistentState(payload: PersistentStorePayload): Prom
 
     const resp = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
+      headers: buildSupabaseHeaders(key, {
         Prefer: "resolution=merge-duplicates,return=minimal",
-      },
+      }),
       body: JSON.stringify({
         id: "default",
         payload: cleanRemotePayload,
