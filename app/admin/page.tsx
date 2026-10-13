@@ -1225,6 +1225,14 @@ export default function AdminConsolePage() {
             <span className="material-symbols-outlined text-sm">grid_view</span>
             <span>전체 상담 예약 현황 보기</span>
           </button>
+          <a
+            href="/Lighthouse_PTC_Admin_Manual.docx"
+            download="Lighthouse_PTC_운영자_매뉴얼.docx"
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-xs"
+          >
+            <span className="material-symbols-outlined text-sm">menu_book</span>
+            <span>운영자 매뉴얼 다운로드 (Google Docs)</span>
+          </a>
           <button
             onClick={() => loadData(true)}
             disabled={syncing}
