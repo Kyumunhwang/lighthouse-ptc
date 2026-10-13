@@ -37,8 +37,18 @@ export async function POST(req: NextRequest) {
     await hydrateFromPersistentStore();
     const body = await req.json();
 
-    // Support admin actions via POST as well (e.g., CLEAR_ALL, CANCEL_ONE)
+    // Support admin-only actions via POST (CLEAR_ALL, CANCEL_ONE)
+    // Strictly prohibited for Parents and Teachers — only Admin ('운영자') can cancel or reset reservations
     if (body.action === "CLEAR_ALL") {
+      if (body.requesterRole !== "운영자") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "예약 취소 및 초기화 권한은 운영자에게만 있습니다. 학부모 및 교사는 예약을 취소할 수 없습니다.",
+          },
+          { status: 403 }
+        );
+      }
       const removedCount = await clearAllReservations();
       return NextResponse.json({
         success: true,
@@ -48,6 +58,15 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.action === "CANCEL_ONE" && body.id) {
+      if (body.requesterRole !== "운영자") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "확정된 예약은 학부모나 교사가 취소할 수 없으며, 오직 운영자에 의해서만 취소가 가능합니다.",
+          },
+          { status: 403 }
+        );
+      }
       const deleted = await deleteReservationById(body.id);
       return NextResponse.json({
         success: deleted,
@@ -210,6 +229,15 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const body = await req.json();
+    if (body.requesterRole !== "운영자") {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "예약 취소 및 초기화는 운영자(Admin)만 수행할 수 있습니다. 학부모 및 교사는 예약을 취소할 수 없습니다.",
+        },
+        { status: 403 }
+      );
+    }
     if (body.clearAll) {
       const count = await clearAllReservations();
       return NextResponse.json({ success: true, removedCount: count });

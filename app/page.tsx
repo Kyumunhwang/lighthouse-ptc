@@ -30,6 +30,15 @@ export default function WelcomePage() {
   const [verificationError, setVerificationError] = useState("");
   const [siteConfig, setSiteConfig] = useState<any>(null);
 
+  const getGradeOrderWeight = (g: string): number => {
+    const clean = (g || "").trim().toUpperCase();
+    const order = ["M6", "M7", "M8", "H9", "H10", "H11", "H12", "G6", "G7", "G8", "G9", "G10", "G11", "G12"];
+    const idx = order.indexOf(clean);
+    if (idx >= 0) return idx;
+    const numMatch = clean.match(/\d+/);
+    return numMatch ? parseInt(numMatch[0], 10) + 20 : 999;
+  };
+
   // Sync data on load
   useEffect(() => {
     async function loadInitial() {
@@ -39,9 +48,11 @@ export default function WelcomePage() {
         if (json.success) {
           setStudents(json.students || []);
           setSiteConfig(json.config || null);
-          const grades = Array.from(
-            new Set((json.students || []).map((s: StudentRecord) => s.grade))
-          ).filter(Boolean) as string[];
+          const grades = (
+            Array.from(
+              new Set((json.students || []).map((s: StudentRecord) => s.grade))
+            ).filter(Boolean) as string[]
+          ).sort((a, b) => getGradeOrderWeight(a) - getGradeOrderWeight(b));
           setAvailableGrades(grades);
         }
       } catch (err) {
@@ -56,7 +67,9 @@ export default function WelcomePage() {
   // Update filtered students when grade changes
   useEffect(() => {
     if (selectedGrade) {
-      const filtered = students.filter((s) => s.grade === selectedGrade);
+      const filtered = students
+        .filter((s) => s.grade === selectedGrade)
+        .sort((a, b) => a.studentNameKo.localeCompare(b.studentNameKo, "ko"));
       setGradeStudents(filtered);
       setSelectedStudentId("");
     } else {
@@ -64,18 +77,18 @@ export default function WelcomePage() {
     }
   }, [selectedGrade, students]);
 
-  // Handle Google Login & Role Check (운영자 / 교사 / 학부모 구분)
+  // Handle Login & Role Check (운영자 / 교사 / 학부모 구분)
   const handleGoogleLogin = async () => {
     setVerificationError("");
 
     const trimmedEmail = authEmail.trim();
     if (!trimmedEmail) {
-      setVerificationError("이메일 주소를 먼저 입력해 주세요");
+      setVerificationError("이메일을 입력해주세요");
       return;
     }
 
     if (!trimmedEmail.includes("@")) {
-      setVerificationError("올바른 Google 이메일 주소 형식을 입력해 주세요.");
+      setVerificationError("올바른 이메일 주소 형식을 입력해 주세요.");
       return;
     }
 
@@ -254,14 +267,10 @@ export default function WelcomePage() {
 
             {!isLoggedIn ? (
               <div className="space-y-3">
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  본인의 Google 이메일 주소를 입력하신 후 로그인해 주세요. 등록된 계정에 따라 <strong>운영자</strong>, <strong>교사</strong>, <strong>학부모</strong> 화면으로 자동 연결됩니다.
-                </p>
-
-                {/* Email input for Google auth */}
+                {/* Email input */}
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-slate-700">
-                    Google Email Account
+                    이메일을 입력해주세요
                   </label>
                   <input
                     type="email"
@@ -285,27 +294,10 @@ export default function WelcomePage() {
                   type="button"
                   onClick={() => handleGoogleLogin()}
                   disabled={loading}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 transition shadow-sm"
+                  className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-[#00193c] text-white border border-[#00193c] rounded-lg text-xs font-bold hover:bg-[#002d62] transition shadow-sm"
                 >
-                  <svg className="w-4 h-4" viewBox="0 0 24 24">
-                    <path
-                      fill="#4285F4"
-                      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"
-                    />
-                    <path
-                      fill="#EA4335"
-                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
-                    />
-                  </svg>
-                  {loading ? "인증 확인 중..." : "Sign in with Google Account"}
+                  <span className="material-symbols-outlined text-base">login</span>
+                  {loading ? "인증 확인 중..." : "Lighthouse PTC Login"}
                 </button>
               </div>
             ) : (

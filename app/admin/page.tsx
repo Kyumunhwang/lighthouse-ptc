@@ -248,7 +248,7 @@ export default function AdminConsolePage() {
     }
   };
 
-  // --- Reservation Cancel & Reset (예약 취소 / 전체 예약 초기화) ---
+  // --- Reservation Cancel & Reset (예약 취소 / 전체 예약 초기화 - 운영자 전용) ---
   const handleCancelSingleReservation = async (resItem: ReservationRecord) => {
     if (
       !confirm(
@@ -265,6 +265,7 @@ export default function AdminConsolePage() {
         body: JSON.stringify({
           action: "CANCEL_ONE",
           id: resItem.id,
+          requesterRole: "운영자",
         }),
       });
       const data = await res.json();
@@ -294,12 +295,17 @@ export default function AdminConsolePage() {
       const res = await fetch("/api/reservations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "CLEAR_ALL" }),
+        body: JSON.stringify({
+          action: "CLEAR_ALL",
+          requesterRole: "운영자",
+        }),
       });
       const data = await res.json();
       if (data.success) {
         alert(data.message || "전체 예약 내역이 모두 초기화되었습니다.");
         loadData();
+      } else {
+        alert(data.error || "초기화 실패");
       }
     } catch (err: any) {
       alert("초기화 오류: " + err.message);
@@ -1040,13 +1046,43 @@ export default function AdminConsolePage() {
     );
   }, [teacherEmails, roleSearchQuery]);
 
-  // Distinct Student Grades & Filtered Students
+  const [studentSortMode, setStudentSortMode] = useState<
+    "grade_asc" | "grade_desc" | "name_asc" | "name_desc"
+  >("grade_asc");
+
+  const getGradeOrderWeight = (g: string): number => {
+    const clean = (g || "").trim().toUpperCase();
+    const order = [
+      "M6",
+      "M7",
+      "M8",
+      "H9",
+      "H10",
+      "H11",
+      "H12",
+      "G6",
+      "G7",
+      "G8",
+      "G9",
+      "G10",
+      "G11",
+      "G12",
+    ];
+    const idx = order.indexOf(clean);
+    if (idx >= 0) return idx;
+    const numMatch = clean.match(/\d+/);
+    return numMatch ? parseInt(numMatch[0], 10) + 20 : 999;
+  };
+
+  // Distinct Student Grades (sorted M6 -> H12) & Filtered/Sorted Students
   const availableGrades = useMemo(() => {
-    return Array.from(new Set(students.map((s) => s.grade).filter(Boolean)));
+    return Array.from(new Set(students.map((s) => s.grade).filter(Boolean))).sort(
+      (a, b) => getGradeOrderWeight(a) - getGradeOrderWeight(b)
+    );
   }, [students]);
 
   const filteredStudents = useMemo(() => {
-    return students.filter((s) => {
+    const filtered = students.filter((s) => {
       if (studentGradeFilter !== "ALL" && s.grade !== studentGradeFilter) return false;
       if (!studentSearchQuery.trim()) return true;
       const q = studentSearchQuery.toLowerCase().trim();
@@ -1058,7 +1094,31 @@ export default function AdminConsolePage() {
         s.grade.toLowerCase().includes(q)
       );
     });
-  }, [students, studentGradeFilter, studentSearchQuery]);
+
+    return [...filtered].sort((a, b) => {
+      if (studentSortMode === "grade_asc") {
+        const diff = getGradeOrderWeight(a.grade) - getGradeOrderWeight(b.grade);
+        if (diff !== 0) return diff;
+        return a.studentNameKo.localeCompare(b.studentNameKo, "ko");
+      }
+      if (studentSortMode === "grade_desc") {
+        const diff = getGradeOrderWeight(b.grade) - getGradeOrderWeight(a.grade);
+        if (diff !== 0) return diff;
+        return a.studentNameKo.localeCompare(b.studentNameKo, "ko");
+      }
+      if (studentSortMode === "name_asc") {
+        const nameCmp = a.studentNameKo.localeCompare(b.studentNameKo, "ko");
+        if (nameCmp !== 0) return nameCmp;
+        return getGradeOrderWeight(a.grade) - getGradeOrderWeight(b.grade);
+      }
+      if (studentSortMode === "name_desc") {
+        const nameCmp = b.studentNameKo.localeCompare(a.studentNameKo, "ko");
+        if (nameCmp !== 0) return nameCmp;
+        return getGradeOrderWeight(a.grade) - getGradeOrderWeight(b.grade);
+      }
+      return 0;
+    });
+  }, [students, studentGradeFilter, studentSearchQuery, studentSortMode]);
 
   // --- Schedule Matrix Calculations & Helpers (Loop-Free & Null-Safe) ---
   const [showMatrixView, setShowMatrixView] = useState(true);
@@ -1686,14 +1746,27 @@ export default function AdminConsolePage() {
               <select
                 value={studentGradeFilter}
                 onChange={(e) => setStudentGradeFilter(e.target.value)}
-                className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white"
+                className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-semibold"
               >
                 <option value="ALL">전체 학년 ({students.length}명)</option>
-                {availableGrades.map((g) => (
-                  <option key={g} value={g}>
-                    {g} 학년
-                  </option>
-                ))}
+                {availableGrades.map((g) => {
+                  const cnt = students.filter((s) => s.grade === g).length;
+                  return (
+                    <option key={g} value={g}>
+                      {g} 학년 ({cnt}명)
+                    </option>
+                  );
+                })}
+              </select>
+              <select
+                value={studentSortMode}
+                onChange={(e) => setStudentSortMode(e.target.value as any)}
+                className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-semibold"
+              >
+                <option value="grade_asc">학년순 정렬 (M6 → H12)</option>
+                <option value="grade_desc">학년 역순 정렬 (H12 → M6)</option>
+                <option value="name_asc">학생 이름순 (가나다)</option>
+                <option value="name_desc">학생 이름 역순 (하타파)</option>
               </select>
               <input
                 type="text"
@@ -1740,12 +1813,83 @@ export default function AdminConsolePage() {
             </div>
           </div>
 
+          {/* Quick Grade Filter Pills */}
+          <div className="flex items-center gap-1.5 flex-wrap pt-1 pb-1 border-b border-slate-100">
+            <span className="text-[11px] font-bold text-slate-500 mr-1">학년 빠른 선택:</span>
+            <button
+              type="button"
+              onClick={() => setStudentGradeFilter("ALL")}
+              className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition border ${
+                studentGradeFilter === "ALL"
+                  ? "bg-[#00193c] text-white border-[#00193c]"
+                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+              }`}
+            >
+              전체 ({students.length}명)
+            </button>
+            {availableGrades.map((g) => {
+              const cnt = students.filter((s) => s.grade === g).length;
+              return (
+                <button
+                  key={g}
+                  type="button"
+                  onClick={() => setStudentGradeFilter(g)}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-bold transition border ${
+                    studentGradeFilter === g
+                      ? "bg-[#002d62] text-white border-[#002d62]"
+                      : "bg-white text-slate-700 border-slate-200 hover:bg-blue-50"
+                  }`}
+                >
+                  {g} ({cnt}명)
+                </button>
+              );
+            })}
+          </div>
+
           <div className="overflow-x-auto max-h-[360px]">
             <table className="w-full text-left border-collapse text-xs">
               <thead className="sticky top-0 bg-slate-50 z-10">
                 <tr className="border-b border-slate-200 text-slate-600 font-semibold">
-                  <th className="p-2.5">학년 (Grade)</th>
-                  <th className="p-2.5">학생 성명 (한글 / 영문)</th>
+                  <th
+                    onClick={() =>
+                      setStudentSortMode((prev) =>
+                        prev === "grade_asc" ? "grade_desc" : "grade_asc"
+                      )
+                    }
+                    className="p-2.5 cursor-pointer hover:bg-slate-100 select-none transition"
+                    title="클릭하여 학년순(오름차순/내림차순) 정렬"
+                  >
+                    <div className="flex items-center gap-1">
+                      <span>학년 (Grade)</span>
+                      <span className="text-[10px] text-[#002d62] font-bold">
+                        {studentSortMode === "grade_asc"
+                          ? "▲"
+                          : studentSortMode === "grade_desc"
+                          ? "▼"
+                          : "↕"}
+                      </span>
+                    </div>
+                  </th>
+                  <th
+                    onClick={() =>
+                      setStudentSortMode((prev) =>
+                        prev === "name_asc" ? "name_desc" : "name_asc"
+                      )
+                    }
+                    className="p-2.5 cursor-pointer hover:bg-slate-100 select-none transition"
+                    title="클릭하여 학생 성명순 정렬"
+                  >
+                    <div className="flex items-center gap-1">
+                      <span>학생 성명 (한글 / 영문)</span>
+                      <span className="text-[10px] text-[#002d62] font-bold">
+                        {studentSortMode === "name_asc"
+                          ? "▲"
+                          : studentSortMode === "name_desc"
+                          ? "▼"
+                          : "↕"}
+                      </span>
+                    </div>
+                  </th>
                   <th className="p-2.5">아버지 성명 (Father)</th>
                   <th className="p-2.5">어머니 성명 (Mother)</th>
                   <th className="p-2.5 text-right">관리</th>

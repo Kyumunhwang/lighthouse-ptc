@@ -253,6 +253,9 @@ export default function TeacherPortalPage() {
             <p className="text-xs text-slate-500">
               {currentProfile?.role || "로그인하신 선생님의 배정된 학부모 상담 타임테이블 현황입니다."}
             </p>
+            <p className="text-[11px] text-[#aa3344] font-semibold pt-1">
+              ※ 확정된 상담 예약의 취소 권한은 운영자(Admin)에게만 있으며, 교사 및 학부모 화면에서는 임의 취소가 불가합니다.
+            </p>
           </div>
 
           <div className="flex items-center gap-2 print:hidden">

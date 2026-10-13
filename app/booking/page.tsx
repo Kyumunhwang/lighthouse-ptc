@@ -104,9 +104,9 @@ export default function SlotBookingPage() {
     return timeSlots.filter((t) => t.date === selectedDate);
   }, [timeSlots, selectedDate]);
 
-  // Already confirmed reservations for THIS student (e.g. booked earlier or by other parent)
-  const studentConfirmedCount = useMemo(() => {
-    if (!studentContext) return 0;
+  // Already confirmed reservations for THIS student (locked; cannot be cancelled by parent)
+  const studentConfirmedList = useMemo(() => {
+    if (!studentContext) return [];
     const sName = `${studentContext.studentNameKo} (${studentContext.studentNameEn})`.trim().toLowerCase();
     const sGrade = (studentContext.grade || "").trim().toLowerCase();
     return reservations.filter(
@@ -115,8 +115,10 @@ export default function SlotBookingPage() {
         (r.studentGrade || "").trim().toLowerCase() === sGrade &&
         ((r.studentName || "").trim().toLowerCase() === sName ||
           (r.studentName || "").includes(studentContext.studentNameKo))
-    ).length;
+    );
   }, [reservations, studentContext]);
+
+  const studentConfirmedCount = studentConfirmedList.length;
 
   const maxSelectable = Math.max(0, 4 - studentConfirmedCount);
 
@@ -155,9 +157,12 @@ export default function SlotBookingPage() {
     );
   };
 
-  // Check if student has already booked this teacher in draft
+  // Check if student has already booked this teacher in draft OR in confirmed bookings
   const isTeacherAlreadySelected = (teacherName: string): boolean => {
-    return selectedBookings.some((b) => b.teacherName === teacherName);
+    return (
+      selectedBookings.some((b) => b.teacherName === teacherName) ||
+      studentConfirmedList.some((r) => r.teacherName.trim() === teacherName.trim())
+    );
   };
 
   // Toggle slot selection
@@ -171,12 +176,23 @@ export default function SlotBookingPage() {
       return;
     }
 
-    // 2. If already reserved by someone else -> disabled
+    // 2. If already reserved -> disabled (cannot cancel confirmed reservation)
     if (isSlotReserved(teacher.nameEn, slot.time, slot.date)) {
+      const isMineConfirmed = studentConfirmedList.some(
+        (r) =>
+          r.teacherName.trim() === teacher.nameEn.trim() &&
+          r.timeSlot.trim() === slot.time.trim() &&
+          r.date.trim() === slot.date.trim()
+      );
+      if (isMineConfirmed) {
+        setErrorMessage(
+          "이미 확정된 예약입니다. 학부모님은 직접 예약을 취소하거나 변경할 수 없으며, 오직 운영자에 의해서만 예약 취소가 가능합니다."
+        );
+      }
       return;
     }
 
-    // 2. If already selected by me, unselect it
+    // 2b. If already selected by me in current draft, unselect draft item
     const existingIndex = selectedBookings.findIndex(
       (b) =>
         b.teacherName === teacher.nameEn &&
@@ -191,7 +207,9 @@ export default function SlotBookingPage() {
 
     // 3. Check student-wide quota (Max 4 total slots including existing bookings)
     if (studentConfirmedCount >= 4) {
-      setErrorMessage(`해당 학생은 이미 4개의 상담 예약이 완료되어 있어 추가 예약이 불가능합니다.`);
+      setErrorMessage(
+        `해당 학생은 이미 4개의 상담 예약이 확정되어 있어 추가 예약이나 변경이 불가능합니다. (취소/변경은 운영자에게만 권한이 있습니다)`
+      );
       return;
     }
 
@@ -204,18 +222,20 @@ export default function SlotBookingPage() {
       return;
     }
 
-    // 4. Check if student already selected this same teacher
+    // 4. Check if student already selected or confirmed this same teacher
     if (isTeacherAlreadySelected(teacher.nameEn)) {
-      setErrorMessage(`${teacher.nameEn} (${teacher.nameKo}) 교사는 이미 다른 시간대에 선택되어 있습니다.`);
+      setErrorMessage(`${teacher.nameEn} (${teacher.nameKo}) 교사는 이미 선택 또는 예약 확정되어 있습니다.`);
       return;
     }
 
-    // 5. Check if user already booked another teacher at the EXACT same time slot (Schedule clash)
-    const timeClash = selectedBookings.some(
-      (b) => b.date === slot.date && b.timeSlot === slot.time
-    );
+    // 5. Check if user already booked another teacher at the EXACT same time slot (Schedule clash in draft or confirmed)
+    const timeClash =
+      selectedBookings.some((b) => b.date === slot.date && b.timeSlot === slot.time) ||
+      studentConfirmedList.some(
+        (r) => r.date.trim() === slot.date.trim() && r.timeSlot.trim() === slot.time.trim()
+      );
     if (timeClash) {
-      setErrorMessage(`동일한 시간대(${slot.time})에 이미 다른 교사 상담이 선택되어 있습니다.`);
+      setErrorMessage(`동일한 시간대(${slot.time})에 이미 다른 교사 상담이 선택 또는 확정되어 있습니다.`);
       return;
     }
 
@@ -259,6 +279,11 @@ export default function SlotBookingPage() {
       setErrorMessage("최소 1개 이상의 상담 시간을 선택해 주세요.");
       return;
     }
+
+    const ok = confirm(
+      `선택하신 ${selectedBookings.length}개의 상담 예약을 최종 확정하시겠습니까?\n\n※ 예약이 확정된 후에는 학부모님이 직접 취소하거나 변경할 수 없으며, 오직 운영자에 의해서만 예약 취소가 가능합니다.`
+    );
+    if (!ok) return;
 
     setSubmitting(true);
     setErrorMessage("");
@@ -358,6 +383,32 @@ export default function SlotBookingPage() {
               style={{ width: `${((selectedBookings.length + studentConfirmedCount) / 4) * 100}%` }}
             ></div>
           </div>
+
+          <div className="mt-2 text-[11px] text-[#aa3344] font-semibold flex items-start gap-1">
+            <span className="material-symbols-outlined text-[14px] shrink-0 mt-0.5">info</span>
+            <span>
+              확정된 예약은 학부모님이 직접 취소하거나 변경할 수 없으며, 오직 운영자에 의해서만 예약 취소가 가능합니다.
+            </span>
+          </div>
+
+          {studentConfirmedList.length > 0 && (
+            <div className="mt-2.5 p-2.5 bg-white rounded-lg border border-blue-200 space-y-1">
+              <div className="text-[10px] font-bold text-[#002d62] flex items-center justify-between">
+                <span>이미 확정된 상담 예약 ({studentConfirmedList.length}건)</span>
+                <span className="text-[10px] text-slate-500 font-normal">취소/변경 불가 (운영자 전용)</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {studentConfirmedList.map((r) => (
+                  <span
+                    key={r.id}
+                    className="px-2 py-0.5 bg-blue-50 text-[#00193c] border border-blue-200 rounded text-[10px] font-semibold"
+                  >
+                    🔒 {r.teacherName} · {r.date} {r.timeSlot}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Date Selector Tabs */}
