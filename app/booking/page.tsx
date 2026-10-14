@@ -563,6 +563,11 @@ export default function SlotBookingPage() {
                         );
                       }
 
+                      const isOfficeConsultSlot =
+                        slot.time === "5:40-6:00pm" ||
+                        slot.time === "6:00-6:20pm" ||
+                        slot.time === "6:20-6:40pm";
+
                       return (
                         <button
                           key={slot.id}
@@ -571,12 +576,18 @@ export default function SlotBookingPage() {
                           className={`py-2 px-1 text-center rounded-lg text-[10px] font-semibold transition border ${
                             mySelection
                               ? "bg-[#002d62] text-white border-[#002d62] shadow-sm"
+                              : isOfficeConsultSlot
+                              ? "bg-[#fefce8] text-[#854d0e] border-[#fde047] hover:bg-[#fef9c3]"
                               : "bg-[#f0fdf4] text-[#15803d] border-[#86efac] hover:bg-[#dcfce7]"
                           }`}
                         >
                           <div>{slot.time}</div>
                           <div className="text-[9px] font-normal">
-                            {mySelection ? "선택됨" : "예약 가능"}
+                            {mySelection
+                              ? "선택됨"
+                              : isOfficeConsultSlot
+                              ? "교무실과 협의"
+                              : "예약 가능"}
                           </div>
                         </button>
                       );
