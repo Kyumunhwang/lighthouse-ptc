@@ -1388,7 +1388,7 @@ export default function AdminConsolePage() {
 
       <main className="max-w-7xl mx-auto p-6 space-y-6">
         {/* KPI Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
             <span className="text-[10px] font-bold text-slate-400 uppercase">등록 교사 / 학생 수</span>
             <div className="text-2xl font-bold text-[#00193c] mt-1">
@@ -1410,22 +1410,6 @@ export default function AdminConsolePage() {
             </div>
             <span className="text-[11px] text-slate-500">실시간 반영 및 영구 보존</span>
           </div>
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-            <span className="text-[10px] font-bold text-slate-400 uppercase">데이터 영구 저장소 상태</span>
-            <div className="text-sm font-bold text-[#00193c] mt-1 truncate flex items-center gap-1.5">
-              <span
-                className={`w-2.5 h-2.5 rounded-full ${
-                  supabaseStatus?.connected ? "bg-emerald-500" : "bg-amber-500"
-                }`}
-              ></span>
-              <span>
-                {supabaseStatus?.connected ? "Supabase Cloud 연동됨" : "로컬 저장소 활성 (Supabase 대기)"}
-              </span>
-            </div>
-            <span className="text-[11px] text-slate-500">
-              학년도: {config.academicYear || "2026–2027"}
-            </span>
-          </div>
         </div>
 
         {/* Schedule Matrix Overview Table (날짜별 교사·시간대별 예약 종합 현황표) */}
@@ -1441,9 +1425,6 @@ export default function AdminConsolePage() {
                 </span>
                 날짜별 교사·시간대별 상담 예약 현황 매트릭스 (종합 상황판)
               </div>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                가로는 시작시간, 세로는 한글 교사명으로 정렬되어 각 셀에서 예약된 학생 이름을 한눈에 확인하실 수 있습니다. 예약된 셀을 클릭하면 확인증/취소 관리가 가능합니다.
-              </p>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
@@ -1454,7 +1435,6 @@ export default function AdminConsolePage() {
                     key={d}
                     onClick={() => {
                       setMatrixSelectedDate(d);
-                      setShowMatrixView(true);
                     }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
                       activeDate === d
@@ -1478,30 +1458,10 @@ export default function AdminConsolePage() {
                 <span className="material-symbols-outlined text-sm text-amber-700">edit_calendar</span>
                 <span>상담 일자 변경</span>
               </button>
-
-              {/* View/Hide Matrix Button */}
-              <button
-                onClick={() => setShowMatrixView(!showMatrixView)}
-                className="px-3 py-1.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 transition flex items-center gap-1 shadow-2xs shrink-0"
-              >
-                <span className="material-symbols-outlined text-sm">
-                  {showMatrixView ? "expand_less" : "grid_view"}
-                </span>
-                <span>{showMatrixView ? "화면 접기" : "전체 예약 화면 열기"}</span>
-              </button>
             </div>
           </div>
 
-          {!showMatrixView ? (
-            <div className="p-4 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs text-slate-500 flex items-center justify-center gap-2">
-              <span className="material-symbols-outlined text-base text-slate-400">visibility</span>
-              <span>
-                현재 현황표가 접혀 있습니다. 우측 상단의 <strong>[전체 예약 화면 열기]</strong> 버튼을 누르면 상담 예약 매트릭스가 표시됩니다.
-              </span>
-            </div>
-          ) : (
-            <>
-              {/* Matrix Stats Summary Bar */}
+          {/* Matrix Stats Summary Bar */}
               <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 bg-slate-50 rounded-xl text-xs text-slate-600 border border-slate-200/70">
                 <div className="flex items-center gap-3">
                   <span className="font-semibold text-[#00193c]">
@@ -1611,8 +1571,6 @@ export default function AdminConsolePage() {
                   </tbody>
                 </table>
               </div>
-            </>
-          )}
         </div>
 
         {/* On-Site Parent Search, QR Code Issuance & Reservation Cancel/Reset Desk */}
@@ -1822,7 +1780,7 @@ export default function AdminConsolePage() {
                 학생 및 학부모 명부 관리 — 학부모 성명 검증용 ({students.length}명)
               </h2>
               <p className="text-[11px] text-slate-500">
-                학부모 로그인 시 본교 재학생 학부모인지 검증하기 위한 <strong>학생 성명 및 아버지/어머니 성함</strong>을 관리하며, 새 학기 진급 시 <strong>[전체 학년 일괄 진급 (M6→H12)]</strong> 버튼으로 한 번에 진급 및 H12 졸업 삭제가 가능합니다.
+                학부모 로그인 시 본교 재학생 학부모인지 검증하기 위한 <strong>학생 성명 및 아버지/어머니 성함이 입력이 되어 있어야 하고 학부모 로그인시 학부모 성함을 입력하고 일치해야만 로그인이 됩니다.</strong> 또한 새 학기 진급 시 <strong>[전체 학년 일괄 진급 (M6→H12)]</strong> 버튼으로 한 번에 진급 및 H12 졸업 삭제가 가능합니다.
               </p>
             </div>
 
