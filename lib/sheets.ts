@@ -391,8 +391,8 @@ export function parseTimeSlotMinutes(timeStr: string): number {
 }
 
 export const REQUIRED_EXTRA_TIME_SLOTS: TimeSlotRecord[] = [
-  { id: "time_extra_oct30_120", day: "목요일", time: "1:20-1:50pm", date: "Oct. 30", comment: "" },
-  { id: "time_extra_nov01_120", day: "금요일", time: "1:20-1:50pm", date: "Nov. 1", comment: "" },
+  { id: "time_extra_oct30_130", day: "목요일", time: "1:30-1:50pm", date: "Oct. 30", comment: "" },
+  { id: "time_extra_nov01_130", day: "금요일", time: "1:30-1:50pm", date: "Nov. 1", comment: "" },
   { id: "time_extra_oct30_510", day: "목요일", time: "5:10-5:30pm", date: "Oct. 30", comment: "" },
   { id: "time_extra_nov01_510", day: "금요일", time: "5:10-5:30pm", date: "Nov. 1", comment: "" },
 ];
@@ -438,15 +438,19 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
       });
     }
 
-    // 2. Parse time slots and guarantee required slots (1:20-1:50pm, 5:10-5:30pm for Oct. 30 & Nov. 1)
+    // 2. Parse time slots and guarantee required slots (1:30-1:50pm, 5:10-5:30pm for Oct. 30 & Nov. 1)
     const timeSlotMap = new Map<string, TimeSlotRecord>();
     for (let i = 1; i < timeRows.length; i++) {
       const row = timeRows[i];
       if (!row || !row[1]) continue;
       const day = (row[0] || "").trim();
-      const time = (row[1] || "").trim();
+      let time = (row[1] || "").trim();
       const date = (row[2] || "").trim();
       const comment = (row[3] || "").trim();
+      // Replace any old 1:20-1:50pm with 1:30-1:50pm
+      if (time === "1:20-1:50pm") {
+        time = "1:30-1:50pm";
+      }
       const key = `${date}__${time}`.toLowerCase();
       timeSlotMap.set(key, {
         id: `time_${i}`,
@@ -455,6 +459,13 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
         date,
         comment,
       });
+    }
+
+    // Remove legacy 1:20-1:50pm keys if any
+    for (const key of Array.from(timeSlotMap.keys())) {
+      if (key.includes("1:20-1:50pm")) {
+        timeSlotMap.delete(key);
+      }
     }
 
     // Merge required extra slots if missing in Google Sheets
