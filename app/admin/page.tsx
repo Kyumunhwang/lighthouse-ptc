@@ -146,6 +146,11 @@ export default function AdminConsolePage() {
   // Schedule Matrix Overview State (날짜별 교사·시간대별 예약 매트릭스)
   const [matrixSelectedDate, setMatrixSelectedDate] = useState<string>("");
 
+  // Consultation Dates Management Modal (운영자 상담 일자 일괄 변경 관리)
+  const [dateModalOpen, setDateModalOpen] = useState(false);
+  const [dateEditMap, setDateEditMap] = useState<Record<string, string>>({});
+  const [savingDates, setSavingDates] = useState(false);
+
   const loadData = async (force: boolean = false) => {
     if (force) setSyncing(true);
     try {
@@ -245,6 +250,60 @@ export default function AdminConsolePage() {
       alert("연동 오류: " + err.message);
     } finally {
       setSavingSupabase(false);
+    }
+  };
+
+  // --- Consultation Dates Management (상담 일자 일괄 변경) ---
+  const handleOpenDateModal = () => {
+    const initialMap: Record<string, string> = {};
+    matrixDates.forEach((d) => {
+      initialMap[d] = d;
+    });
+    setDateEditMap(initialMap);
+    setDateModalOpen(true);
+  };
+
+  const handleSaveDates = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const entries = Object.entries(dateEditMap);
+    const hasChanges = entries.some(([oldD, newD]) => oldD.trim() !== newD.trim());
+    if (!hasChanges) {
+      setDateModalOpen(false);
+      return;
+    }
+
+    const changeSummary = entries
+      .filter(([oldD, newD]) => oldD.trim() !== newD.trim())
+      .map(([oldD, newD]) => `• ${oldD} ➔ ${newD}`)
+      .join("\n");
+
+    const confirmed = confirm(
+      `다음 상담 일자를 변경하시겠습니까?\n\n${changeSummary}\n\n※ 주의: 운영자 종합 상황판, 학부모 예약 화면, 교사 시간표 및 기존 예약 내역의 날짜가 일괄 변경 및 동기화됩니다.`
+    );
+    if (!confirmed) return;
+
+    setSavingDates(true);
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "UPDATE_DATES",
+          dateMapping: dateEditMap,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert("상담 일자가 성공적으로 변경 및 전체 동기화되었습니다!");
+        setDateModalOpen(false);
+        loadData(true);
+      } else {
+        alert("날짜 변경 오류: " + (data.error || ""));
+      }
+    } catch (err: any) {
+      alert("날짜 변경 오류: " + err.message);
+    } finally {
+      setSavingDates(false);
     }
   };
 
@@ -1408,6 +1467,17 @@ export default function AdminConsolePage() {
                   </button>
                 ))}
               </div>
+
+              {/* Edit Dates Button */}
+              <button
+                type="button"
+                onClick={handleOpenDateModal}
+                title="상담 일자(Oct. 30, Nov. 1 등)를 내년 또는 새 학기 일정에 맞추어 일괄 변경합니다."
+                className="px-3 py-1.5 bg-amber-50 border border-amber-300 hover:bg-amber-100 rounded-xl text-xs font-bold text-amber-900 transition flex items-center gap-1 shadow-2xs shrink-0"
+              >
+                <span className="material-symbols-outlined text-sm text-amber-700">edit_calendar</span>
+                <span>상담 일자 변경</span>
+              </button>
 
               {/* View/Hide Matrix Button */}
               <button
@@ -2745,6 +2815,100 @@ export default function AdminConsolePage() {
                 className="flex-1 py-2.5 bg-[#00193c] text-white rounded-xl text-xs font-bold hover:bg-[#002d62]"
               >
                 저장하기
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Consultation Dates Management Modal (운영자 상담 일자 일괄 변경 모달) */}
+      {dateModalOpen && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleSaveDates}
+            className="bg-white rounded-2xl p-6 w-full max-w-[460px] shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-1.5">
+                <span className="material-symbols-outlined text-base text-amber-600">calendar_month</span>
+                <span className="text-sm font-bold text-[#00193c]">
+                  상담 일자 일괄 변경 및 동기화
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDateModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              새 학기나 내년 운영 시 변경되는 상담 일자(예: <code>Oct. 30</code> ➔ <code>Oct. 29</code>)를 입력하시면, <strong>운영자 상황판, 학부모 예약 화면, 교사 시간표 및 기존 예약 내역</strong>의 날짜가 일괄 변경 및 영구 저장됩니다.
+            </p>
+
+            <div className="space-y-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                등록된 상담 일자 목록 ({matrixDates.length}일)
+              </div>
+              {matrixDates.map((origDate, idx) => (
+                <div key={origDate} className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-700 flex items-center justify-between">
+                    <span>{idx + 1}일차 기준 일자</span>
+                    <span className="text-[11px] text-slate-400 font-normal">(기존: {origDate})</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-1.5 bg-slate-200 text-slate-700 text-xs font-mono font-semibold rounded-lg shrink-0">
+                      {origDate}
+                    </span>
+                    <span className="text-slate-400 text-xs">➔</span>
+                    <input
+                      type="text"
+                      required
+                      value={dateEditMap[origDate] ?? origDate}
+                      onChange={(e) =>
+                        setDateEditMap((prev) => ({
+                          ...prev,
+                          [origDate]: e.target.value,
+                        }))
+                      }
+                      placeholder={`예: ${origDate}`}
+                      className="flex-1 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-[#00193c] bg-white"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="p-3 bg-amber-50 rounded-xl border border-amber-200/80 text-[11px] text-amber-900 leading-relaxed">
+              💡 <strong>안내:</strong> 저장 시 Supabase DB에 영구 반영되어 다른 기기나 학부모 화면에도 새로고침 시 즉시 적용됩니다.
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDateModalOpen(false)}
+                className="flex-1 py-2.5 border border-slate-300 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                취소
+              </button>
+              <button
+                type="submit"
+                disabled={savingDates}
+                className="flex-1 py-2.5 bg-[#00193c] text-white rounded-xl text-xs font-bold hover:bg-[#002d62] disabled:opacity-50 transition flex items-center justify-center gap-1.5"
+              >
+                {savingDates ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>동기화 중...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-sm">check</span>
+                    <span>상담 일자 저장 및 전체 동기화</span>
+                  </>
+                )}
               </button>
             </div>
           </form>

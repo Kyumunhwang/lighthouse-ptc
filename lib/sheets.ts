@@ -71,6 +71,7 @@ interface CachedSheetData {
   baseTeachers: TeacherRecord[];
   baseStudents: StudentRecord[];
   baseTeacherEmails: TeacherEmailRecord[];
+  baseTimeSlots: TimeSlotRecord[];
   teachers: TeacherRecord[];
   timeSlots: TimeSlotRecord[];
   students: StudentRecord[];
@@ -86,6 +87,7 @@ const cache: CachedSheetData = {
   baseTeachers: [],
   baseStudents: [],
   baseTeacherEmails: [],
+  baseTimeSlots: [],
   teachers: [],
   timeSlots: [],
   students: [],
@@ -99,6 +101,7 @@ const cache: CachedSheetData = {
     deletedTeacherEmails: [],
     upsertedStudents: [],
     deletedStudentIds: [],
+    dateMapping: {},
   },
   lastSyncedAt: 0,
   initializedFromStore: false,
@@ -287,6 +290,20 @@ function recomputeMergedRecords(): void {
     }
   }
   cache.students = mergedStudents;
+
+  // 4. Merge & Map Time Slots (Date Renaming / Override)
+  const dMap = ov.dateMapping || {};
+  if (cache.baseTimeSlots.length > 0) {
+    cache.timeSlots = cache.baseTimeSlots.map((ts) => {
+      const targetDate = dMap[ts.date.trim()] || ts.date;
+      return { ...ts, date: targetDate };
+    }).sort((a, b) => {
+      if (a.date !== b.date) {
+        return a.date.localeCompare(b.date);
+      }
+      return parseTimeSlotMinutes(a.time) - parseTimeSlotMinutes(b.time);
+    });
+  }
 }
 
 /**
@@ -320,9 +337,14 @@ export async function hydrateFromPersistentStore(): Promise<void> {
     deletedTeacherEmails: stored.overrides?.deletedTeacherEmails || [],
     upsertedStudents: stored.overrides?.upsertedStudents || [],
     deletedStudentIds: stored.overrides?.deletedStudentIds || [],
+    dateMapping: stored.overrides?.dateMapping || {},
   };
   cache.initializedFromStore = true;
-  if (cache.baseTeachers.length > 0 || cache.baseStudents.length > 0) {
+  if (
+    cache.baseTeachers.length > 0 ||
+    cache.baseStudents.length > 0 ||
+    cache.baseTimeSlots.length > 0
+  ) {
     recomputeMergedRecords();
   }
 }
@@ -511,6 +533,7 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
     }
 
     cache.baseTeachers = baseTeachers;
+    cache.baseTimeSlots = timeSlots;
     cache.timeSlots = timeSlots;
     cache.baseStudents = baseStudents;
     cache.baseTeacherEmails = baseTeacherEmails;
@@ -593,6 +616,54 @@ export async function clearAllReservations(): Promise<number> {
   cache.reservations = [];
   await persistCurrentState();
   return count;
+}
+
+/**
+ * Admin Date Mapping CRUD (운영자 상담 일자 일괄 변경 및 동기화)
+ */
+export async function adminUpdateDates(
+  newDateMapping: Record<string, string>,
+  conferenceDatesText?: string
+): Promise<{ timeSlots: TimeSlotRecord[]; updatedDates: string[] }> {
+  await hydrateFromPersistentStore();
+
+  const currentMapping = cache.overrides.dateMapping || {};
+  const mergedMapping: Record<string, string> = { ...currentMapping };
+
+  // Update mapping
+  for (const [oldDate, newDate] of Object.entries(newDateMapping)) {
+    const trimmedOld = oldDate.trim();
+    const trimmedNew = newDate.trim();
+    if (trimmedOld && trimmedNew) {
+      mergedMapping[trimmedOld] = trimmedNew;
+
+      // Cascade update to existing confirmed/pending reservations
+      cache.reservations.forEach((r) => {
+        if (r.date.trim() === trimmedOld) {
+          r.date = trimmedNew;
+        }
+      });
+
+      // Cascade update to blocked slots
+      cache.blockedSlots.forEach((b) => {
+        if (b.date.trim() === trimmedOld) {
+          b.date = trimmedNew;
+        }
+      });
+    }
+  }
+
+  cache.overrides.dateMapping = mergedMapping;
+
+  if (conferenceDatesText) {
+    updateConfig({ conferenceDates: conferenceDatesText });
+  }
+
+  recomputeMergedRecords();
+  await persistCurrentState();
+
+  const distinctDates = Array.from(new Set(cache.timeSlots.map((t) => t.date))).filter(Boolean);
+  return { timeSlots: cache.timeSlots, updatedDates: distinctDates };
 }
 
 /**

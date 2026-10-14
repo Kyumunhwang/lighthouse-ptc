@@ -33,6 +33,9 @@ export interface PersistentOverrides {
   // Custom or modified students/parents
   upsertedStudents: StudentRecord[];
   deletedStudentIds: string[];
+
+  // Date mappings for term transitions / admin customization (e.g. { "Oct. 30": "Oct. 29", "Nov. 1": "Oct. 30" })
+  dateMapping?: Record<string, string>;
 }
 
 export interface PersistentStorePayload {
@@ -52,6 +55,7 @@ const DEFAULT_OVERRIDES: PersistentOverrides = {
   deletedTeacherEmails: [],
   upsertedStudents: [],
   deletedStudentIds: [],
+  dateMapping: {},
 };
 
 const DEFAULT_PAYLOAD: PersistentStorePayload = {

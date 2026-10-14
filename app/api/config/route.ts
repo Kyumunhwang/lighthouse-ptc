@@ -12,6 +12,7 @@ import {
   adminBulkUploadStudents,
   adminBulkUploadTeacherEmails,
   adminBulkUploadTeachers,
+  adminUpdateDates,
   addBlockedSlot,
   deleteBlockedSlot,
   persistCurrentState,
@@ -47,6 +48,22 @@ export async function POST(req: NextRequest) {
       await persistCurrentState();
       await syncSheetsData(true);
       return NextResponse.json({ success: true, config: updated });
+    }
+
+    if (action === "UPDATE_DATES") {
+      const { dateMapping, conferenceDates } = body;
+      if (!dateMapping || typeof dateMapping !== "object") {
+        return NextResponse.json(
+          { success: false, error: "유효한 날짜 매핑 데이터가 전달되지 않았습니다." },
+          { status: 400 }
+        );
+      }
+      const result = await adminUpdateDates(dateMapping, conferenceDates);
+      return NextResponse.json({
+        success: true,
+        message: "상담 일자가 성공적으로 업데이트되고 전체 시스템에 동기화되었습니다.",
+        updatedDates: result.updatedDates,
+      });
     }
 
     if (action === "UPDATE_SUPABASE_CONFIG") {
