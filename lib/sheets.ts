@@ -413,8 +413,19 @@ export function parseTimeSlotMinutes(timeStr: string): number {
 }
 
 export const REQUIRED_EXTRA_TIME_SLOTS: TimeSlotRecord[] = [
+  // 1:30-1:50pm
   { id: "time_extra_oct30_130", day: "목요일", time: "1:30-1:50pm", date: "Oct. 30", comment: "" },
   { id: "time_extra_nov01_130", day: "금요일", time: "1:30-1:50pm", date: "Nov. 1", comment: "" },
+  // 2:30-2:50pm (User requested)
+  { id: "time_extra_oct30_230", day: "목요일", time: "2:30-2:50pm", date: "Oct. 30", comment: "" },
+  { id: "time_extra_nov01_230", day: "금요일", time: "2:30-2:50pm", date: "Nov. 1", comment: "" },
+  // 4:00-4:20pm (User requested)
+  { id: "time_extra_oct30_400", day: "목요일", time: "4:00-4:20pm", date: "Oct. 30", comment: "" },
+  { id: "time_extra_nov01_400", day: "금요일", time: "4:00-4:20pm", date: "Nov. 1", comment: "" },
+  // 4:30-4:50pm (User requested)
+  { id: "time_extra_oct30_430", day: "목요일", time: "4:30-4:50pm", date: "Oct. 30", comment: "" },
+  { id: "time_extra_nov01_430", day: "금요일", time: "4:30-4:50pm", date: "Nov. 1", comment: "" },
+  // 5:10-5:30pm
   { id: "time_extra_oct30_510", day: "목요일", time: "5:10-5:30pm", date: "Oct. 30", comment: "" },
   { id: "time_extra_nov01_510", day: "금요일", time: "5:10-5:30pm", date: "Nov. 1", comment: "" },
 ];
@@ -460,18 +471,22 @@ export async function syncSheetsData(force: boolean = false): Promise<CachedShee
       });
     }
 
-    // 2. Parse time slots and guarantee required slots (1:30-1:50pm, 5:10-5:30pm for Oct. 30 & Nov. 1)
+    // 2. Parse time slots and guarantee required slots
     const timeSlotMap = new Map<string, TimeSlotRecord>();
     for (let i = 1; i < timeRows.length; i++) {
       const row = timeRows[i];
       if (!row || !row[1]) continue;
       const day = (row[0] || "").trim();
       let time = (row[1] || "").trim();
-      const date = (row[2] || "").trim();
+      let date = (row[2] || "").trim();
       const comment = (row[3] || "").trim();
       // Replace any old 1:20-1:50pm with 1:30-1:50pm
       if (time === "1:20-1:50pm") {
         time = "1:30-1:50pm";
+      }
+      // Fix potential Google Sheet typo where Friday rows (e.g. 4:00-4:20pm, 4:30-4:50pm) were entered with "Oct. 30" instead of "Nov. 1"
+      if (day.includes("금") && date === "Oct. 30") {
+        date = "Nov. 1";
       }
       const key = `${date}__${time}`.toLowerCase();
       timeSlotMap.set(key, {
