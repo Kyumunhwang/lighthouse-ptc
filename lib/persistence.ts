@@ -199,7 +199,7 @@ export function getSupabaseStatus(): {
   };
 }
 
-function buildSupabaseHeaders(
+export function buildSupabaseHeaders(
   key: string,
   extra?: Record<string, string>
 ): Record<string, string> {
@@ -212,6 +212,63 @@ function buildSupabaseHeaders(
     headers["Authorization"] = `Bearer ${key}`;
   }
   return headers;
+}
+
+/**
+ * Lightweight ping to Supabase Database to prevent inactivity pausing
+ */
+export async function pingSupabaseDatabase(): Promise<{
+  success: boolean;
+  message: string;
+  timestamp: string;
+  latencyMs?: number;
+}> {
+  const status = getSupabaseStatus();
+  if (!status.connected) {
+    return {
+      success: false,
+      message: "Supabase credentials are not configured",
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  const url = (process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || runtimeSupabaseUrl || DEFAULT_SUPABASE_URL).replace(/\/+$/, "");
+  const key = process.env.SUPABASE_SECRET_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || runtimeSupabaseKey || DEFAULT_SUPABASE_ANON_KEY;
+
+  const start = Date.now();
+  try {
+    const endpoint = `${url}/rest/v1/ptc_state?id=eq.default&select=id,updated_at`;
+    const resp = await fetch(endpoint, {
+      method: "GET",
+      headers: buildSupabaseHeaders(key),
+      cache: "no-store",
+    });
+
+    const latencyMs = Date.now() - start;
+    if (resp.ok) {
+      return {
+        success: true,
+        message: `Supabase database ping succeeded (HTTP ${resp.status})`,
+        timestamp: new Date().toISOString(),
+        latencyMs,
+      };
+    } else {
+      const errText = await resp.text();
+      return {
+        success: false,
+        message: `Supabase ping failed with status ${resp.status}: ${errText.substring(0, 100)}`,
+        timestamp: new Date().toISOString(),
+        latencyMs,
+      };
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Supabase network error: ${err.message}`,
+      timestamp: new Date().toISOString(),
+      latencyMs: Date.now() - start,
+    };
+  }
 }
 
 /**

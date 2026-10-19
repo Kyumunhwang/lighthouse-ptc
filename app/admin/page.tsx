@@ -2242,7 +2242,32 @@ export default function AdminConsolePage() {
                 어제 예약한 내역을 다음 날 다른 컴퓨터나 스마트폰에서도 영구적으로 조회/유지할 수 있도록 Supabase DB와 실시간 연동합니다.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-semibold flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span>Vercel Cron 자동 핑 활성 (매일 자동 갱신)</span>
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const res = await fetch("/api/cron/keepalive");
+                    const data = await res.json();
+                    if (data.status === "healthy" || data.success) {
+                      alert(`Supabase DB 자동 핑 테스트 성공!\n\n• 상태: 정상 연결됨 (HTTP 200)\n• 지연 시간: ${data.latencyMs ?? 0}ms\n• 타임스탬프: ${data.timestamp}\n\n※ 매일 자정 Vercel Cron이 이 주소를 자동으로 호출하여 DB 일시정지를 영구 방지합니다.`);
+                    } else {
+                      alert(`핑 테스트 결과: ${data.message || "오류"}`);
+                    }
+                  } catch (e: any) {
+                    alert(`핑 테스트 실패: ${e.message}`);
+                  }
+                }}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 transition"
+                title="Supabase DB로 가벼운 핑을 전송하여 활성 상태를 즉시 테스트합니다."
+              >
+                <span className="material-symbols-outlined text-sm text-emerald-600">bolt</span>
+                <span>지금 즉시 핑 테스트</span>
+              </button>
               <button
                 type="button"
                 onClick={() => setShowSqlModal(true)}
