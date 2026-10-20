@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
+import { isTeacherMatch } from "@/lib/teacher-matcher";
 
 interface TeacherRecord {
   id: string;
@@ -1257,13 +1258,7 @@ export default function AdminConsolePage() {
       const rTime = (r.timeSlot || "").trim().toLowerCase();
       if (rDate !== targetDate || rTime !== targetTime) return false;
 
-      const rTeacher = (r.teacherName || "").trim().toLowerCase();
-      return (
-        (tEn && rTeacher === tEn) ||
-        (tKo && rTeacher === tKo) ||
-        (tEn && rTeacher.includes(tEn)) ||
-        (tKo && rTeacher.includes(tKo))
-      );
+      return isTeacherMatch(teacher, r.teacherName);
     });
   };
 
@@ -1285,7 +1280,7 @@ export default function AdminConsolePage() {
       const bTime = (b.timeSlot || "").trim().toLowerCase();
 
       const teacherMatch =
-        bTeacher === "all" || (tEn && bTeacher === tEn) || (tKo && bTeacher === tKo);
+        bTeacher === "all" || isTeacherMatch(teacher, b.teacherName);
       const dateMatch = bDate === "all" || bDate === targetDate;
       const timeMatch = bTime === "all" || bTime === targetTime;
 

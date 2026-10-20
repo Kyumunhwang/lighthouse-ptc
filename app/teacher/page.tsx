@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import { isTeacherMatch } from "@/lib/teacher-matcher";
 
 interface ReservationRecord {
   id: string;
@@ -180,13 +181,8 @@ export default function TeacherPortalPage() {
 
     return reservations.filter((r) => {
       if (r.status !== "CONFIRMED") return false;
-      const rTeacher = (r.teacherName || "").trim().toLowerCase();
-      const rClean = cleanNameToken(r.teacherName || "");
-
-      if (pEn && (rTeacher === pEn || rTeacher.includes(pEn))) return true;
-      if (pEnClean && rClean === pEnClean) return true;
-      if (pKo && rTeacher.includes(pKo)) return true;
-      if (qClean && (rTeacher.includes(qClean) || rClean.includes(qClean))) return true;
+      if (currentProfile && isTeacherMatch(currentProfile, r.teacherName)) return true;
+      if (loggedTeacherQuery && isTeacherMatch({ nameEn: loggedTeacherQuery, nameKo: loggedTeacherQuery }, r.teacherName)) return true;
       return false;
     });
   }, [reservations, loggedTeacherQuery, currentProfile]);
