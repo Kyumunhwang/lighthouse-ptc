@@ -4,6 +4,7 @@ import React, { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import QRCode from "qrcode";
 import { isTeacherMatch } from "@/lib/teacher-matcher";
+import { parseStartEndTime, triggerCsvDownload } from "@/lib/time-slot-utils";
 
 interface TeacherRecord {
   id: string;
@@ -788,6 +789,72 @@ export default function AdminConsolePage() {
     URL.revokeObjectURL(url);
   };
 
+  // Export confirmed reservations to Excel/CSV with parsed start time and end time
+  const handleExportReservationsExcel = (onlyFiltered: boolean = false) => {
+    const targetList = onlyFiltered
+      ? filteredReservations
+      : reservations.filter((r) => r.status === "CONFIRMED");
+
+    if (targetList.length === 0) {
+      alert("다운로드할 상담 예약 내역이 없습니다.");
+      return;
+    }
+
+    // Sort: Date asc -> Start Time asc -> Teacher Name asc
+    const sorted = [...targetList].sort((a, b) => {
+      const dateCmp = (a.date || "").localeCompare(b.date || "");
+      if (dateCmp !== 0) return dateCmp;
+      const tA = parseStartEndTime(a.timeSlot).startTime;
+      const tB = parseStartEndTime(b.timeSlot).startTime;
+      if (tA !== tB) return tA.localeCompare(tB);
+      return (a.teacherName || "").localeCompare(b.teacherName || "");
+    });
+
+    const header = [
+      "예약번호(Slip ID)",
+      "상담 일자",
+      "상담 시작시간",
+      "상담 종료시간",
+      "상담 시간대(슬롯)",
+      "시작시간(12h)",
+      "종료시간(12h)",
+      "학생 학년",
+      "학생 성명",
+      "학부모 성명",
+      "학부모 이메일",
+      "상담 교사",
+      "상담 교과(과목)",
+      "예약 상태",
+      "신청 일시",
+    ];
+
+    const dataRows = sorted.map((r) => {
+      const parsed = parseStartEndTime(r.timeSlot);
+      return [
+        r.uniqueToken || r.id,
+        r.date || "",
+        parsed.startTime,
+        parsed.endTime,
+        r.timeSlot || "",
+        parsed.startTime12,
+        parsed.endTime12,
+        r.studentGrade || "",
+        r.studentName || "",
+        r.parentName || "",
+        r.email || "",
+        r.teacherName || "",
+        r.option || "",
+        r.status === "CONFIRMED" ? "확정" : r.status,
+        r.timestamp || "",
+      ];
+    });
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const filterTag = onlyFiltered && searchQuery.trim() ? "_검색결과" : "_전체";
+    const filename = `등대PTC_상담예약현황_시작종료시간분리${filterTag}_${todayStr}.csv`;
+    triggerCsvDownload(filename, [header, ...dataRows]);
+  };
+
   // 1) Students & Parents CSV Template Download & Upload
   const handleDownloadStudentCsvTemplate = () => {
     const header = ["학년", "학생한글성명", "학생영문성명", "아버지성명", "어머니성명"];
@@ -1453,6 +1520,17 @@ export default function AdminConsolePage() {
                 <span className="material-symbols-outlined text-sm text-amber-700">edit_calendar</span>
                 <span>상담 일자 변경</span>
               </button>
+
+              {/* Export All Reservations to Excel */}
+              <button
+                type="button"
+                onClick={() => handleExportReservationsExcel(false)}
+                title="모든 확정된 상담 예약 내역을 시작시간과 종료시간으로 분리하여 엑셀(CSV) 파일로 다운로드합니다."
+                className="px-3 py-1.5 bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 rounded-xl text-xs font-bold text-emerald-900 transition flex items-center gap-1 shadow-2xs shrink-0"
+              >
+                <span className="material-symbols-outlined text-sm text-emerald-700">download</span>
+                <span>상담일정 엑셀 다운로드</span>
+              </button>
             </div>
           </div>
 
@@ -1593,6 +1671,17 @@ export default function AdminConsolePage() {
                   className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00193c]"
                 />
               </div>
+
+              {/* Export to Excel with parsed start/end time */}
+              <button
+                type="button"
+                onClick={() => handleExportReservationsExcel(Boolean(searchQuery.trim()))}
+                title="상담 예약 목록을 시작시간과 종료시간으로 분리하여 엑셀(CSV) 파일로 다운로드합니다. (검색어 입력 시 검색결과만 다운로드)"
+                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition shadow-xs shrink-0"
+              >
+                <span className="material-symbols-outlined text-sm">download</span>
+                <span>{searchQuery.trim() ? "검색결과 엑셀 다운로드" : "예약현황 엑셀 다운로드"}</span>
+              </button>
               <button
                 type="button"
                 onClick={handleClearAllReservations}
@@ -1638,9 +1727,14 @@ export default function AdminConsolePage() {
                         <span className="text-[11px] text-[#735c00] ml-1.5">({item.option})</span>
                       </td>
                       <td className="p-2.5">
-                        <span className="font-semibold text-blue-800 bg-blue-50 px-2 py-0.5 rounded">
-                          {item.date} {item.timeSlot}
-                        </span>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-semibold text-blue-900 bg-blue-50 px-2 py-0.5 rounded w-fit text-[11px]">
+                            {item.date} {parseStartEndTime(item.timeSlot).startTime ? `${parseStartEndTime(item.timeSlot).startTime} ~ ${parseStartEndTime(item.timeSlot).endTime}` : item.timeSlot}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-mono pl-0.5">
+                            ({item.timeSlot})
+                          </span>
+                        </div>
                       </td>
                       <td className="p-2.5 text-right space-x-1.5 whitespace-nowrap">
                         <button

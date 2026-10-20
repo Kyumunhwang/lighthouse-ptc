@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { isTeacherMatch } from "@/lib/teacher-matcher";
+import { parseStartEndTime, triggerCsvDownload } from "@/lib/time-slot-utils";
 
 interface ReservationRecord {
   id: string;
@@ -179,13 +180,67 @@ export default function TeacherPortalPage() {
     const pEnClean = currentProfile ? cleanNameToken(currentProfile.nameEn) : "";
     const pKo = currentProfile ? currentProfile.nameKo.trim().toLowerCase() : "";
 
-    return reservations.filter((r) => {
+    const filtered = reservations.filter((r) => {
       if (r.status !== "CONFIRMED") return false;
       if (currentProfile && isTeacherMatch(currentProfile, r.teacherName)) return true;
       if (loggedTeacherQuery && isTeacherMatch({ nameEn: loggedTeacherQuery, nameKo: loggedTeacherQuery }, r.teacherName)) return true;
       return false;
     });
+
+    // Sort by Date then Start Time asc
+    return filtered.sort((a, b) => {
+      if (a.date !== b.date) return (a.date || "").localeCompare(b.date || "");
+      const tA = parseStartEndTime(a.timeSlot).startTime;
+      const tB = parseStartEndTime(b.timeSlot).startTime;
+      return tA.localeCompare(tB);
+    });
   }, [reservations, loggedTeacherQuery, currentProfile]);
+
+  // Export teacher's confirmed schedule to Excel/CSV with parsed start and end times
+  const handleDownloadScheduleExcel = () => {
+    if (mySchedules.length === 0) {
+      alert("다운로드할 상담 일정 내역이 없습니다.");
+      return;
+    }
+
+    const header = [
+      "상담 일자",
+      "상담 시작시간",
+      "상담 종료시간",
+      "상담 시간대(슬롯)",
+      "시작시간(12h)",
+      "종료시간(12h)",
+      "학생명",
+      "학생 학년",
+      "학부모 성명",
+      "상담 교과",
+      "예약 상태",
+    ];
+
+    const dataRows = mySchedules.map((item) => {
+      const parsed = parseStartEndTime(item.timeSlot);
+      return [
+        item.date || "",
+        parsed.startTime,
+        parsed.endTime,
+        item.timeSlot || "",
+        parsed.startTime12,
+        parsed.endTime12,
+        item.studentName || "",
+        item.studentGrade || "",
+        item.parentName || "",
+        item.option || "",
+        "확정(CONFIRMED)",
+      ];
+    });
+
+    const teacherName = currentProfile
+      ? (currentProfile.nameKo || currentProfile.nameEn)
+      : (loggedTeacherQuery || "교사");
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const filename = `등대PTC_상담일정_${teacherName}_시작종료시간분리_${todayStr}.csv`;
+    triggerCsvDownload(filename, [header, ...dataRows]);
+  };
 
   const handleReturnToLogin = () => {
     sessionStorage.removeItem("ptc_user");
@@ -291,13 +346,25 @@ export default function TeacherPortalPage() {
               </span>
               예약된 학부모 상담 타임테이블 ({mySchedules.length}건)
             </h2>
-            <button
-              onClick={() => window.print()}
-              className="px-3 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-semibold text-slate-700 flex items-center gap-1 print:hidden"
-            >
-              <span className="material-symbols-outlined text-xs">print</span>
-              일정표 출력
-            </button>
+            <div className="flex items-center gap-2 print:hidden">
+              <button
+                type="button"
+                onClick={handleDownloadScheduleExcel}
+                title="상담 일정을 시작시간과 종료시간으로 분리하여 엑셀(CSV) 파일로 다운로드합니다."
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition"
+              >
+                <span className="material-symbols-outlined text-sm">download</span>
+                <span>일정 엑셀 다운로드 (시작·종료시간 분리)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs font-semibold text-slate-700 flex items-center gap-1"
+              >
+                <span className="material-symbols-outlined text-xs">print</span>
+                일정표 출력
+              </button>
+            </div>
           </div>
 
           {loading ? (
@@ -327,9 +394,14 @@ export default function TeacherPortalPage() {
                     <tr key={item.id} className="hover:bg-slate-50/80 transition">
                       <td className="p-3 font-medium text-slate-800">{item.date}</td>
                       <td className="p-3">
-                        <span className="font-bold text-[#002d62] bg-[#f0f4fc] px-2 py-0.5 rounded">
-                          {item.timeSlot}
-                        </span>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="font-bold text-[#002d62] bg-[#f0f4fc] px-2 py-0.5 rounded w-fit">
+                            {parseStartEndTime(item.timeSlot).startTime ? `${parseStartEndTime(item.timeSlot).startTime} ~ ${parseStartEndTime(item.timeSlot).endTime}` : item.timeSlot}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-mono pl-0.5">
+                            ({item.timeSlot})
+                          </span>
+                        </div>
                       </td>
                       <td className="p-3 font-semibold text-[#00193c]">
                         {item.studentName} ({item.studentGrade})
