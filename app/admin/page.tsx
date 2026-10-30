@@ -103,6 +103,9 @@ export default function AdminConsolePage() {
   const [noticeTimesInput, setNoticeTimesInput] = useState("");
   const [noticeTitleInput, setNoticeTitleInput] = useState("");
   const [noticeContentInput, setNoticeContentInput] = useState("");
+  const [isBookingOpen, setIsBookingOpen] = useState(true);
+  const [bookingClosedMessageInput, setBookingClosedMessageInput] = useState("");
+  const [bookingPeriodNoticeInput, setBookingPeriodNoticeInput] = useState("");
   const [updatingNotice, setUpdatingNotice] = useState(false);
 
   // Search & QR Code Modal
@@ -180,6 +183,14 @@ export default function AdminConsolePage() {
         setNoticeContentInput(
           json.config?.noticeContent ||
             "상담을 원하시는 선생님과 상담 항목을 최대 4개까지 선택하신 후 예약하시기 바랍니다."
+        );
+        setIsBookingOpen(json.config?.isBookingOpen !== false);
+        setBookingClosedMessageInput(
+          json.config?.bookingClosedMessage ||
+            "학부모 상담(PTC) 신청 기간이 종료되어 더 이상 상담 예약을 받지 않습니다. 상담 관련 추가 문의나 일정 조율이 필요하신 경우 학교 교무실로 연락해 주시기 바랍니다."
+        );
+        setBookingPeriodNoticeInput(
+          json.config?.bookingPeriodNotice || "상담 신청 기간 내에만 예약 및 신청이 가능합니다."
         );
       }
     } catch (err) {
@@ -437,16 +448,61 @@ export default function AdminConsolePage() {
             conferenceTimes: noticeTimesInput.trim(),
             noticeTitle: noticeTitleInput.trim(),
             noticeContent: noticeContentInput.trim(),
+            isBookingOpen,
+            bookingClosedMessage: bookingClosedMessageInput.trim(),
+            bookingPeriodNotice: bookingPeriodNoticeInput.trim(),
           },
         }),
       });
       const data = await res.json();
       if (data.success) {
-        alert("상담 일정, 학년도 및 공지사항이 성공적으로 저장되었습니다.");
+        alert("상담 일정, 학년도, 접수 상태 및 공지사항이 성공적으로 저장 및 반영되었습니다.");
         loadData();
       }
     } catch (err: any) {
       alert("공지사항 저장 오류: " + err.message);
+    } finally {
+      setUpdatingNotice(false);
+    }
+  };
+
+  const handleToggleBookingOpen = async (targetOpen: boolean) => {
+    const actionText = targetOpen ? "상담 신청 접수를 재개(오픈)" : "상담 신청 접수를 마감(중지)";
+    const confirmed = confirm(
+      `${actionText}하시겠습니까?\n\n${
+        targetOpen
+          ? "학부모 화면에서 정상적으로 교과와 시간을 선택하여 상담 예약을 신청할 수 있습니다."
+          : "학부모 화면에서 추가 상담 예약 접수가 전면 차단되며, 설정된 정중한 마감 안내 문구가 표시됩니다."
+      }`
+    );
+    if (!confirmed) return;
+
+    setUpdatingNotice(true);
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "UPDATE_CONFIG",
+          configData: {
+            isBookingOpen: targetOpen,
+            bookingClosedMessage: bookingClosedMessageInput.trim(),
+            bookingPeriodNotice: bookingPeriodNoticeInput.trim(),
+          },
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsBookingOpen(targetOpen);
+        alert(
+          targetOpen
+            ? "상담 신청 접수가 오픈(활성화)되었습니다."
+            : "상담 신청 접수가 안전하게 마감(차단)되었습니다."
+        );
+        loadData();
+      }
+    } catch (err: any) {
+      alert("접수 상태 변경 오류: " + err.message);
     } finally {
       setUpdatingNotice(false);
     }
@@ -1450,7 +1506,7 @@ export default function AdminConsolePage() {
 
       <main className="max-w-7xl mx-auto p-6 space-y-6">
         {/* KPI Summary Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
             <span className="text-[10px] font-bold text-slate-400 uppercase">등록 교사 / 학생 수</span>
             <div className="text-2xl font-bold text-[#00193c] mt-1">
@@ -1471,6 +1527,33 @@ export default function AdminConsolePage() {
               {reservations.filter((r) => r.status === "CONFIRMED").length}건
             </div>
             <span className="text-[11px] text-slate-500">실시간 반영 및 영구 보존</span>
+          </div>
+          <div className={`p-4 rounded-xl border shadow-xs transition-colors ${
+            isBookingOpen
+              ? "bg-emerald-50/70 border-emerald-300"
+              : "bg-rose-50/80 border-rose-300"
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold text-slate-500 uppercase">상담 신청 접수 상태</span>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                isBookingOpen ? "bg-emerald-100 text-emerald-800" : "bg-rose-100 text-rose-800"
+              }`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${isBookingOpen ? "bg-emerald-600" : "bg-rose-600"}`}></span>
+                {isBookingOpen ? "OPEN" : "CLOSED"}
+              </span>
+            </div>
+            <div className={`text-lg font-bold mt-1 ${isBookingOpen ? "text-emerald-800" : "text-rose-800"}`}>
+              {isBookingOpen ? "접수 진행 중 (예약가능)" : "상담 신청 마감 (접수차단)"}
+            </div>
+            <button
+              type="button"
+              onClick={() => handleToggleBookingOpen(!isBookingOpen)}
+              className={`mt-1.5 text-[11px] font-bold underline transition hover:opacity-80 block ${
+                isBookingOpen ? "text-rose-700" : "text-emerald-700"
+              }`}
+            >
+              {isBookingOpen ? "➔ 지금 접수 마감(중지)하기" : "➔ 지금 접수 재개(오픈)하기"}
+            </button>
           </div>
         </div>
 
@@ -2458,6 +2541,70 @@ export default function AdminConsolePage() {
             </div>
           </div>
 
+          {/* Booking Period & Open/Close Control Card */}
+          <div className={`p-4 rounded-xl border space-y-3 ${
+            isBookingOpen ? "bg-emerald-50/70 border-emerald-200" : "bg-rose-50/80 border-rose-200"
+          }`}>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200/60">
+              <div className="flex items-center gap-2">
+                <span className={`material-symbols-outlined text-xl ${isBookingOpen ? "text-emerald-700" : "text-rose-700"}`}>
+                  {isBookingOpen ? "check_circle" : "do_not_disturb_on"}
+                </span>
+                <div>
+                  <div className="font-bold text-xs text-slate-800">
+                    상담 신청 접수 On/Off 제어 (시스템 예약 차단)
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    상담 기간이 종료된 후 [상담 신청 마감]을 선택하면 학부모의 신규 예약이 차단되고 정중한 마감 안내문이 노출됩니다.
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsBookingOpen(true)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+                    isBookingOpen
+                      ? "bg-emerald-600 text-white shadow-xs"
+                      : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-xs">lock_open</span>
+                  <span>접수 진행 중 (Open)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsBookingOpen(false)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${
+                    !isBookingOpen
+                      ? "bg-rose-600 text-white shadow-xs"
+                      : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-xs">lock</span>
+                  <span>상담 신청 마감 (Closed)</span>
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="font-semibold text-slate-700 block mb-1 text-xs">
+                상담 신청 마감 시 학부모에게 표시할 정중한 안내 메시지 (Closed Notice Message)
+              </label>
+              <textarea
+                rows={2}
+                value={bookingClosedMessageInput}
+                onChange={(e) => setBookingClosedMessageInput(e.target.value)}
+                placeholder="학부모 상담(PTC) 신청 기간이 종료되어 더 이상 상담 예약을 받지 않습니다. 상담 관련 추가 문의나 일정 조율이 필요하신 경우 학교 교무실로 연락해 주시기 바랍니다."
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-[#00193c] bg-white"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                ※ 접수가 마감되면 학부모가 접속했을 때 메인 화면 및 예약 화면 상단에 위 문구가 정중하게 안내됩니다. 언제든지 변경 가능합니다.
+              </p>
+            </div>
+          </div>
+
           <form onSubmit={handleUpdateNotice} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
             <div>
               <label className="font-semibold text-slate-700 block mb-1">
@@ -2503,6 +2650,19 @@ export default function AdminConsolePage() {
 
             <div>
               <label className="font-semibold text-slate-700 block mb-1">
+                상담 신청 접수 기간 안내 (Booking Period Notice)
+              </label>
+              <input
+                type="text"
+                value={bookingPeriodNoticeInput}
+                onChange={(e) => setBookingPeriodNoticeInput(e.target.value)}
+                placeholder="예: 2026년 10월 20일(월) 09:00 ~ 10월 28일(화) 18:00"
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00193c]"
+              />
+            </div>
+
+            <div>
+              <label className="font-semibold text-slate-700 block mb-1">
                 공지사항 제목 (Notice Title)
               </label>
               <input
@@ -2515,7 +2675,7 @@ export default function AdminConsolePage() {
               />
             </div>
 
-            <div className="md:col-span-2">
+            <div>
               <label className="font-semibold text-slate-700 block mb-1">
                 추가 세부 공지 내용 (Notice Details)
               </label>
@@ -2535,7 +2695,7 @@ export default function AdminConsolePage() {
                 className="px-5 py-2.5 bg-[#00193c] text-white rounded-xl text-xs font-bold hover:bg-[#002d62] transition shadow-xs flex items-center gap-1.5"
               >
                 <span className="material-symbols-outlined text-sm">save</span>
-                <span>{updatingNotice ? "저장 및 반영 중..." : "첫 화면 공지사항 적용하기"}</span>
+                <span>{updatingNotice ? "저장 및 반영 중..." : "접수 상태 및 공지사항 저장/적용하기"}</span>
               </button>
             </div>
           </form>

@@ -13,6 +13,9 @@ export interface AppConfig {
   noticeTitle: string;
   noticeContent: string;
   bookingLimitPerStudent: number;
+  isBookingOpen?: boolean;
+  bookingClosedMessage?: string;
+  bookingPeriodNotice?: string;
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -24,6 +27,10 @@ export const DEFAULT_CONFIG: AppConfig = {
   noticeTitle: "운영 안내 및 신청 공지",
   noticeContent: "상담을 원하시는 선생님과 상담 항목을 최대 4개까지 선택하신 후 예약하시기 바랍니다.",
   bookingLimitPerStudent: 4,
+  isBookingOpen: true,
+  bookingClosedMessage:
+    "학부모 상담(PTC) 신청 기간이 종료되어 더 이상 상담 예약을 받지 않습니다. 상담 관련 추가 문의나 일정 조율이 필요하신 경우 학교 교무실로 연락해 주시기 바랍니다.",
+  bookingPeriodNotice: "상담 신청 기간 내에만 예약 및 신청이 가능합니다.",
 };
 
 // Global in-memory config for runtime modifications (e.g. from Admin console)

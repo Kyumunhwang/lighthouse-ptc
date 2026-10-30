@@ -50,6 +50,7 @@ export default function SlotBookingPage() {
   const [timeSlots, setTimeSlots] = useState<TimeSlotRecord[]>([]);
   const [reservations, setReservations] = useState<ReservationRecord[]>([]);
   const [blockedSlots, setBlockedSlots] = useState<any[]>([]);
+  const [siteConfig, setSiteConfig] = useState<any>(null);
 
   // Selected date tab
   const [selectedDate, setSelectedDate] = useState<string>("Oct. 30");
@@ -80,6 +81,9 @@ export default function SlotBookingPage() {
           setTimeSlots(json.timeSlots || []);
           setReservations(json.reservations || []);
           setBlockedSlots(json.blockedSlots || []);
+          if (json.config) {
+            setSiteConfig(json.config);
+          }
 
           if (json.timeSlots && json.timeSlots.length > 0) {
             setSelectedDate(json.timeSlots[0].date);
@@ -185,6 +189,15 @@ export default function SlotBookingPage() {
   const handleSlotClick = (teacher: TeacherRecord, slot: TimeSlotRecord) => {
     setErrorMessage("");
 
+    // Check if consultation booking period is closed
+    if (siteConfig?.isBookingOpen === false) {
+      setErrorMessage(
+        siteConfig.bookingClosedMessage ||
+          "학부모 상담(PTC) 신청 기간이 종료되어 더 이상 상담 예약을 받지 않습니다. 학교 교무실로 문의해 주시기 바랍니다."
+      );
+      return;
+    }
+
     // 1. If blocked by Admin -> disabled
     const adminBlock = isSlotBlockedByAdmin(teacher.nameEn, slot.time, slot.date);
     if (adminBlock.blocked) {
@@ -202,7 +215,7 @@ export default function SlotBookingPage() {
       );
       if (isMineConfirmed) {
         setErrorMessage(
-          "이미 확정된 예약입니다. 학부모님은 직접 예약을 취소하거나 변경할 수 없으며, 오직 운영자에 의해서만 예약 취소가 가능합니다."
+          "이미 확정된 예약입니다. 확정된 예약은 학부모님이 직접 취소하거나 변경할 수 없으며, 오직 학교 관리자에 의해서만 예약 취소가 가능하오니, 학교로 연락을 주시길 바랍니다."
         );
       }
       return;
@@ -291,13 +304,21 @@ export default function SlotBookingPage() {
 
   // Submit Final Booking
   const handleFinalSubmit = async () => {
+    if (siteConfig?.isBookingOpen === false) {
+      setErrorMessage(
+        siteConfig.bookingClosedMessage ||
+          "학부모 상담(PTC) 신청 기간이 종료되어 더 이상 상담 예약을 받지 않습니다. 학교 교무실로 문의해 주시기 바랍니다."
+      );
+      return;
+    }
+
     if (selectedBookings.length === 0) {
       setErrorMessage("최소 1개 이상의 상담 시간을 선택해 주세요.");
       return;
     }
 
     const ok = confirm(
-      `선택하신 ${selectedBookings.length}개의 상담 예약을 최종 확정하시겠습니까?\n\n※ 예약이 확정된 후에는 학부모님이 직접 취소하거나 변경할 수 없으며, 오직 운영자에 의해서만 예약 취소가 가능합니다.`
+      `선택하신 ${selectedBookings.length}개의 상담 예약을 최종 확정하시겠습니까?\n\n※ 확정된 예약은 학부모님이 직접 취소하거나 변경할 수 없으며, 오직 학교 관리자에 의해서만 예약 취소가 가능하오니, 학교로 연락을 주시길 바랍니다.`
     );
     if (!ok) return;
 
@@ -400,11 +421,32 @@ export default function SlotBookingPage() {
             ></div>
           </div>
 
-          <div className="mt-2 text-[11px] text-[#aa3344] font-semibold flex items-start gap-1">
-            <span className="material-symbols-outlined text-[14px] shrink-0 mt-0.5">info</span>
-            <span>
-              확정된 예약은 학부모님이 직접 취소하거나 변경할 수 없으며, 오직 운영자에 의해서만 예약 취소가 가능합니다.
-            </span>
+          {siteConfig?.isBookingOpen === false && (
+            <div className="mt-2.5 p-3.5 bg-amber-50 rounded-xl border border-amber-300 text-amber-900 text-xs space-y-1 shadow-xs">
+              <div className="flex items-center gap-1.5 font-bold text-amber-950 text-sm">
+                <span className="material-symbols-outlined text-base text-amber-700">event_busy</span>
+                <span>상담 신청 접수가 마감되었습니다</span>
+              </div>
+              <p className="text-[11px] text-amber-800 leading-relaxed whitespace-pre-line">
+                {siteConfig?.bookingClosedMessage ||
+                  "학부모 상담(PTC) 신청 기간이 종료되어 더 이상 상담 예약을 받지 않습니다. 상담 관련 추가 문의나 일정 조율이 필요하신 경우 학교 교무실로 연락해 주시기 바랍니다."}
+              </p>
+            </div>
+          )}
+
+          <div className="mt-2.5 p-3 bg-red-50/90 rounded-xl border border-red-200 text-xs text-[#8a1f2d] space-y-2">
+            <div className="flex items-start gap-1.5 font-bold leading-snug">
+              <span className="material-symbols-outlined text-[16px] text-[#aa3344] shrink-0 mt-0.5">info</span>
+              <span>
+                확정된 예약은 학부모님이 직접 취소하거나 변경할 수 없으며, 오직 학교 관리자에 의해서만 예약 취소가 가능하오니, 학교로 연락을 주시길 바랍니다.
+              </span>
+            </div>
+            <div className="text-[11px] leading-relaxed text-slate-700 bg-white/90 p-2.5 rounded-lg border border-red-100/80 flex items-start gap-1.5">
+              <span className="material-symbols-outlined text-[15px] text-[#002d62] shrink-0 mt-0.5">school</span>
+              <span>
+                상담 예약을 위해서는 먼저 Gradelink에서 상담을 원하시는 교과명과 담당교사를 아래 원하시는 상담일자에 해당 교사의 교과를 찾아서 시간을 선택하시면 됩니다.
+              </span>
+            </div>
           </div>
 
           {studentConfirmedList.length > 0 && (
@@ -610,10 +652,19 @@ export default function SlotBookingPage() {
 
           <button
             onClick={handleFinalSubmit}
-            disabled={selectedBookings.length === 0 || submitting}
-            className="flex-1 py-3 px-4 bg-[#00193c] text-white rounded-xl text-xs font-bold hover:bg-[#002d62] disabled:opacity-50 transition shadow-md flex items-center justify-center gap-2"
+            disabled={siteConfig?.isBookingOpen === false || selectedBookings.length === 0 || submitting}
+            className={`flex-1 py-3 px-4 text-white rounded-xl text-xs font-bold transition shadow-md flex items-center justify-center gap-2 ${
+              siteConfig?.isBookingOpen === false
+                ? "bg-slate-400 cursor-not-allowed opacity-90"
+                : "bg-[#00193c] hover:bg-[#002d62] disabled:opacity-50"
+            }`}
           >
-            {submitting ? (
+            {siteConfig?.isBookingOpen === false ? (
+              <>
+                <span className="material-symbols-outlined text-sm">event_busy</span>
+                <span>상담 신청 마감됨 (예약 불가)</span>
+              </>
+            ) : submitting ? (
               <>
                 <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                 <span>동시성 검증 및 예약 중...</span>

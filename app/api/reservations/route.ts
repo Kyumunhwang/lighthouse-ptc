@@ -11,6 +11,7 @@ import {
   ReservationRecord,
 } from "@/lib/sheets";
 import { slotLockManager } from "@/lib/lock";
+import { getConfig } from "@/lib/config";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +82,20 @@ export async function POST(req: NextRequest) {
       parentName,
       bookings, // Array of { teacherName, option, timeSlot, date }
     } = body;
+
+    // Check if consultation booking period is closed
+    const currentConfig = getConfig();
+    if (currentConfig.isBookingOpen === false) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            currentConfig.bookingClosedMessage ||
+            "학부모 상담(PTC) 신청 기간이 종료되어 더 이상 상담 예약을 받지 않습니다. 학교 교무실로 문의해 주시기 바랍니다.",
+        },
+        { status: 403 }
+      );
+    }
 
     if (!studentName || !parentName || !bookings || !Array.isArray(bookings)) {
       return NextResponse.json(

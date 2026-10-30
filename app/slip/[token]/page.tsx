@@ -396,7 +396,7 @@ export default function ConfirmationSlipPage() {
               당일 학교 방문 시 본 확인증 화면 또는 저장한 이미지를 제시해 주세요.
             </div>
             <div className="text-[11px] text-[#aa3344] font-semibold">
-              ※ 확정된 예약은 학부모님이 직접 취소하거나 변경할 수 없으며, 오직 운영자에 의해서만 예약 취소가 가능합니다.
+              ※ 확정된 예약은 학부모님이 직접 취소하거나 변경할 수 없으며, 오직 학교 관리자에 의해서만 예약 취소가 가능하오니, 학교로 연락을 주시길 바랍니다.
             </div>
           </div>
         </div>

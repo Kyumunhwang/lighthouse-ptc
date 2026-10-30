@@ -213,11 +213,44 @@ export default function WelcomePage() {
                   {siteConfig?.noticeTitle || "운영 안내 및 신청 공지"}
                 </span>
               </div>
-              <span className="bg-[#f7f4eb] text-[#4f3e00] text-[10px] font-semibold px-2 py-0.5 rounded-full border border-[#cca730]/30">
-                Official Notice
-              </span>
+              {siteConfig?.isBookingOpen === false ? (
+                <span className="bg-rose-50 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded-full border border-rose-200 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                  신청 마감 (Closed)
+                </span>
+              ) : (
+                <span className="bg-emerald-50 text-emerald-700 text-[10px] font-semibold px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  접수 진행 중 (Open)
+                </span>
+              )}
             </div>
             <div className="space-y-2.5 text-xs text-[#171c22]">
+              {siteConfig?.isBookingOpen === false && (
+                <div className="flex items-start gap-2 bg-amber-50 p-2.5 rounded-lg border border-amber-200 text-amber-900">
+                  <span className="material-symbols-outlined text-amber-700 text-[18px] shrink-0 mt-0.5">
+                    event_busy
+                  </span>
+                  <div>
+                    <div className="font-bold text-amber-950">상담 신청 접수 마감</div>
+                    <div className="text-[11px] text-amber-800 leading-relaxed mt-0.5 whitespace-pre-line">
+                      {siteConfig.bookingClosedMessage ||
+                        "학부모 상담(PTC) 신청 기간이 종료되어 더 이상 상담 예약을 받지 않습니다. 상담 관련 추가 문의나 일정 조율이 필요하신 경우 학교 교무실로 연락해 주시기 바랍니다."}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {siteConfig?.bookingPeriodNotice && (
+                <div className="flex items-start gap-2 bg-white/90 p-2.5 rounded-lg border border-slate-100">
+                  <span className="material-symbols-outlined text-[#002d62] text-[18px] shrink-0 mt-0.5">
+                    calendar_clock
+                  </span>
+                  <div>
+                    <div className="font-semibold text-[#00193c]">상담 신청 접수 기간</div>
+                    <div className="text-slate-600">{siteConfig.bookingPeriodNotice}</div>
+                  </div>
+                </div>
+              )}
               <div className="flex items-start gap-2 bg-white/90 p-2.5 rounded-lg border border-slate-100">
                 <span className="material-symbols-outlined text-[#aa3344] text-[18px]">
                   event
